@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+data/portfolio.csv
+data/shadow_voo.csv
+data/shadow_qqq.csv

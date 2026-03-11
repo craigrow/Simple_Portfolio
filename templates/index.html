@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Portfolio Tracker</title>
+    <style>
+        body { font-family: sans-serif; margin: 2rem; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
+        th, td { border: 1px solid #ccc; padding: 0.5rem; text-align: right; }
+        th { background: #f0f0f0; }
+        td:nth-child(2), th:nth-child(2) { text-align: left; }
+        h2 { margin-top: 2rem; }
+        .empty { color: #888; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>Simple Portfolio Tracker</h1>
+
+    {% macro render_table(title, rows, columns) %}
+    <h2>{{ title }}{% if rows %}: Total Invested ${{ "%.2f"|format(rows|sum(attribute='TOTAL_VALUE')) }}{% endif %}</h2>
+    {% if rows %}
+    <table>
+        <thead>
+            <tr>
+                {% for col in columns %}<th>{{ col }}</th>{% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                {% for col in columns %}<td>{{ row[col] }}</td>{% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No transactions yet.</p>
+    {% endif %}
+    {% endmacro %}
+
+    {{ render_table("Main Portfolio", portfolio, columns) }}
+    {{ render_table("Shadow Portfolio — VOO (S&P 500)", shadow_voo, columns) }}
+    {{ render_table("Shadow Portfolio — QQQ (NASDAQ)", shadow_qqq, columns) }}
+</body>
+</html>
