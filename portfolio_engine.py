@@ -11,6 +11,7 @@ PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.csv")
 SHADOW_VOO_FILE = os.path.join(DATA_DIR, "shadow_voo.csv")
 SHADOW_QQQ_FILE = os.path.join(DATA_DIR, "shadow_qqq.csv")
 SPLITS_FILE = os.path.join(DATA_DIR, "splits.csv")
+DIVIDENDS_FILE = os.path.join(DATA_DIR, "dividends.csv")
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
 
@@ -177,6 +178,68 @@ def sync_splits():
     return True
 
 
+def _fetch_dividends(tickers):
+    """Fetch dividend history for a set of tickers. Returns list of [TICKER, DATE, AMOUNT] rows."""
+    rows = []
+    for ticker in tickers:
+        t = yf.Ticker(ticker)
+        divs = t.dividends
+        if divs is not None and len(divs) > 0:
+            for date, amount in divs.items():
+                date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
+                rows.append([ticker, date_str, round(float(amount), 6)])
+    return rows
+
+
+def sync_dividends():
+    """Refresh dividend data if stale (last modified before most recent market close)."""
+    last_close = _last_market_close()
+
+    if os.path.exists(DIVIDENDS_FILE):
+        mtime = datetime.fromtimestamp(
+            os.path.getmtime(DIVIDENDS_FILE), tz=ZoneInfo("America/New_York")
+        )
+        if mtime >= last_close:
+            return False
+
+    tickers = _get_all_tickers()
+    if not tickers:
+        return False
+
+    rows = _fetch_dividends(tickers)
+    os.makedirs(os.path.dirname(DIVIDENDS_FILE), exist_ok=True)
+    with open(DIVIDENDS_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["TICKER", "DATE", "AMOUNT"])
+        for row in rows:
+            writer.writerow(row)
+
+    return True
+
+
+def _read_dividends():
+    """Read dividends.csv into a DataFrame."""
+    if not os.path.exists(DIVIDENDS_FILE):
+        return pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+    return pd.read_csv(DIVIDENDS_FILE)
+
+
+def get_total_dividends(ticker, shares, purchase_date, splits_df, dividends_df):
+    """Calculate total dividends received for a holding since purchase date."""
+    if dividends_df.empty:
+        return 0.0
+    ticker_divs = dividends_df[
+        (dividends_df["TICKER"] == ticker) & (dividends_df["DATE"] > purchase_date)
+    ]
+    total = 0.0
+    for _, div in ticker_divs.iterrows():
+        # Shares held at time of dividend = original shares adjusted for splits before dividend date
+        adj_shares = get_adjusted_shares(ticker, shares, purchase_date,
+            splits_df[splits_df["DATE"] <= div["DATE"]])
+        total += adj_shares * div["AMOUNT"]
+    return round(total, 2)
+
+
 def _read_splits():
     """Read splits.csv into a DataFrame."""
     if not os.path.exists(SPLITS_FILE):
@@ -219,27 +282,32 @@ def get_current_values(portfolio_df):
 
 
 def enrich_portfolio(portfolio_df):
-    """Add CURRENT_SHARES and CURRENT_VALUE columns to a portfolio DataFrame."""
+    """Add CURRENT_SHARES, CURRENT_VALUE, and TOTAL_DIVIDENDS columns."""
     if portfolio_df.empty:
-        return portfolio_df, 0.0
+        return portfolio_df, 0.0, 0.0
 
     splits_df = _read_splits()
+    dividends_df = _read_dividends()
     tickers = portfolio_df["TICKER"].unique().tolist()
     current_prices = _fetch_current_prices(tickers)
 
     current_shares = []
     current_values = []
+    total_dividends = []
     for _, row in portfolio_df.iterrows():
         ticker = row["TICKER"]
         adj = get_adjusted_shares(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df)
         price = current_prices.get(ticker, 0.0)
+        divs = get_total_dividends(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df, dividends_df)
         current_shares.append(adj)
         current_values.append(round(adj * price, 2))
+        total_dividends.append(divs)
 
     enriched = portfolio_df.copy()
     enriched["CURRENT_SHARES"] = current_shares
     enriched["CURRENT_VALUE"] = current_values
-    return enriched, round(sum(current_values), 2)
+    enriched["TOTAL_DIVIDENDS"] = total_dividends
+    return enriched, round(sum(current_values), 2), round(sum(total_dividends), 2)
 
 
 def _fetch_current_prices(tickers):

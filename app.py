@@ -8,11 +8,12 @@ app = Flask(__name__)
 def index():
     portfolio_engine.sync()
     portfolio_engine.sync_splits()
+    portfolio_engine.sync_dividends()
     portfolio, shadow_voo, shadow_qqq = portfolio_engine.load_all()
-    portfolio, portfolio_value = portfolio_engine.enrich_portfolio(portfolio)
-    shadow_voo, voo_value = portfolio_engine.enrich_portfolio(shadow_voo)
-    shadow_qqq, qqq_value = portfolio_engine.enrich_portfolio(shadow_qqq)
-    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE"]
+    portfolio, portfolio_value, portfolio_divs = portfolio_engine.enrich_portfolio(portfolio)
+    shadow_voo, voo_value, voo_divs = portfolio_engine.enrich_portfolio(shadow_voo)
+    shadow_qqq, qqq_value, qqq_divs = portfolio_engine.enrich_portfolio(shadow_qqq)
+    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS"]
     return render_template(
         "index.html",
         portfolio=portfolio.to_dict("records") if not portfolio.empty else [],
@@ -22,6 +23,9 @@ def index():
         portfolio_value=portfolio_value,
         voo_value=voo_value,
         qqq_value=qqq_value,
+        portfolio_divs=portfolio_divs,
+        voo_divs=voo_divs,
+        qqq_divs=qqq_divs,
     )
 
 

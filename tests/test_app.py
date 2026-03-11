@@ -20,6 +20,7 @@ def setup_teardown(tmp_path):
     portfolio_engine.SHADOW_VOO_FILE = str(data_dir / "shadow_voo.csv")
     portfolio_engine.SHADOW_QQQ_FILE = str(data_dir / "shadow_qqq.csv")
     portfolio_engine.SPLITS_FILE = str(data_dir / "splits.csv")
+    portfolio_engine.DIVIDENDS_FILE = str(data_dir / "dividends.csv")
 
     with open(portfolio_engine.TRANSACTIONS_FILE, "w", newline="") as f:
         csv.writer(f).writerow(["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED"])
@@ -96,3 +97,4 @@ class TestIndexRoute:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/")
         assert b"Current Value" in resp.data
+        assert b"Dividends" in resp.data

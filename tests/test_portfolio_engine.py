@@ -22,6 +22,7 @@ def setup_teardown(tmp_path):
     portfolio_engine.SHADOW_VOO_FILE = str(data_dir / "shadow_voo.csv")
     portfolio_engine.SHADOW_QQQ_FILE = str(data_dir / "shadow_qqq.csv")
     portfolio_engine.SPLITS_FILE = str(data_dir / "splits.csv")
+    portfolio_engine.DIVIDENDS_FILE = str(data_dir / "dividends.csv")
 
     # Create transactions file with header
     with open(portfolio_engine.TRANSACTIONS_FILE, "w", newline="") as f:
@@ -258,7 +259,7 @@ class TestGetCurrentValues:
         with open(portfolio_engine.SPLITS_FILE, "w", newline="") as f:
             csv.writer(f).writerow(["TICKER", "DATE", "RATIO"])
         portfolio = portfolio_engine.read_csv(portfolio_engine.PORTFOLIO_FILE)
-        enriched, value = portfolio_engine.enrich_portfolio(portfolio)
+        enriched, value, divs = portfolio_engine.enrich_portfolio(portfolio)
         assert value == 1500.0
         assert enriched.iloc[0]["CURRENT_SHARES"] == 10.0
         assert enriched.iloc[0]["CURRENT_VALUE"] == 1500.0
@@ -273,11 +274,101 @@ class TestGetCurrentValues:
             writer.writerow(["TICKER", "DATE", "RATIO"])
             writer.writerow(["MSFT", "2025-06-01", 2.0])
         portfolio = portfolio_engine.read_csv(portfolio_engine.PORTFOLIO_FILE)
-        enriched, value = portfolio_engine.enrich_portfolio(portfolio)
+        enriched, value, divs = portfolio_engine.enrich_portfolio(portfolio)
         assert value == 3000.0
         assert enriched.iloc[0]["CURRENT_SHARES"] == 20.0
         assert enriched.iloc[0]["CURRENT_VALUE"] == 3000.0
 
     def test_empty_portfolio_returns_zero(self):
-        enriched, value = portfolio_engine.enrich_portfolio(pd.DataFrame())
+        enriched, value, divs = portfolio_engine.enrich_portfolio(pd.DataFrame())
         assert value == 0.0
+        assert divs == 0.0
+
+
+class TestGetTotalDividends:
+    def test_no_dividends(self):
+        empty_divs = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+        empty_splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        result = portfolio_engine.get_total_dividends("MSFT", 10.0, "2025-01-02", empty_splits, empty_divs)
+        assert result == 0.0
+
+    def test_dividend_after_purchase(self):
+        divs = pd.DataFrame({"TICKER": ["MSFT"], "DATE": ["2025-06-01"], "AMOUNT": [0.75]})
+        empty_splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        result = portfolio_engine.get_total_dividends("MSFT", 10.0, "2025-01-02", empty_splits, divs)
+        assert result == 7.5  # 10 shares * $0.75
+
+    def test_dividend_before_purchase_ignored(self):
+        divs = pd.DataFrame({"TICKER": ["MSFT"], "DATE": ["2024-06-01"], "AMOUNT": [0.75]})
+        empty_splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        result = portfolio_engine.get_total_dividends("MSFT", 10.0, "2025-01-02", empty_splits, divs)
+        assert result == 0.0
+
+    def test_dividend_with_split_before_dividend(self):
+        splits = pd.DataFrame({"TICKER": ["MSFT"], "DATE": ["2025-03-01"], "RATIO": [2.0]})
+        divs = pd.DataFrame({"TICKER": ["MSFT"], "DATE": ["2025-06-01"], "AMOUNT": [0.75]})
+        # Bought 10 shares on 01-02, 2:1 split on 03-01, dividend on 06-01
+        # At dividend time: 20 shares * $0.75 = $15
+        result = portfolio_engine.get_total_dividends("MSFT", 10.0, "2025-01-02", splits, divs)
+        assert result == 15.0
+
+    def test_multiple_dividends(self):
+        divs = pd.DataFrame({
+            "TICKER": ["MSFT", "MSFT"],
+            "DATE": ["2025-03-01", "2025-06-01"],
+            "AMOUNT": [0.50, 0.75],
+        })
+        empty_splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        result = portfolio_engine.get_total_dividends("MSFT", 10.0, "2025-01-02", empty_splits, divs)
+        assert result == 12.5  # (10 * 0.50) + (10 * 0.75)
+
+    def test_wrong_ticker_ignored(self):
+        divs = pd.DataFrame({"TICKER": ["AAPL"], "DATE": ["2025-06-01"], "AMOUNT": [0.75]})
+        empty_splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        result = portfolio_engine.get_total_dividends("MSFT", 10.0, "2025-01-02", empty_splits, divs)
+        assert result == 0.0
+
+
+class TestSyncDividends:
+    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[["MSFT", "2025-06-01", 0.75]])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_creates_dividends_file(self, mock_price, mock_divs):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        portfolio_engine.sync_dividends()
+        assert os.path.exists(portfolio_engine.DIVIDENDS_FILE)
+        df = pd.read_csv(portfolio_engine.DIVIDENDS_FILE)
+        assert len(df) == 1
+        assert df.iloc[0]["TICKER"] == "MSFT"
+
+    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_no_refresh_when_fresh(self, mock_price, mock_divs):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        portfolio_engine.sync_dividends()
+        mock_divs.reset_mock()
+        portfolio_engine.sync_dividends()
+        mock_divs.assert_not_called()
+
+    def test_no_fetch_when_no_tickers(self):
+        result = portfolio_engine.sync_dividends()
+        assert result is False
+
+
+class TestEnrichWithDividends:
+    @patch.object(portfolio_engine, "_fetch_current_prices", return_value={"MSFT": 150.0})
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_enrich_includes_dividends(self, mock_close, mock_prices):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        with open(portfolio_engine.SPLITS_FILE, "w", newline="") as f:
+            csv.writer(f).writerow(["TICKER", "DATE", "RATIO"])
+        with open(portfolio_engine.DIVIDENDS_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "AMOUNT"])
+            writer.writerow(["MSFT", "2025-06-01", 0.75])
+        portfolio = portfolio_engine.read_csv(portfolio_engine.PORTFOLIO_FILE)
+        enriched, value, divs = portfolio_engine.enrich_portfolio(portfolio)
+        assert enriched.iloc[0]["TOTAL_DIVIDENDS"] == 7.5
+        assert divs == 7.5

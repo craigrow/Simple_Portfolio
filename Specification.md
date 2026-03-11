@@ -146,21 +146,32 @@ As a user I want the app to calculate the current value of my portfolio and of t
 ### User Story #3
 As a user, I want the app to find all the dividends that have been paid, in the main portfolio and the shadow portfolios, sum them up and display that in the title bar so that I can understand not just the price appreciation v. the indexes but the value of dividends v. the index.
 
-### Implementation Plan
+### Status: Complete
 
-**Dividend data management:**
-- Dividend history for all portfolio tickers is persisted to `data/dividends.csv` (columns: TICKER, DATE, AMOUNT).
-- Uses the same staleness rule as splits: refresh once per trading day if the file was last modified before the most recent market close.
-- yfinance provides full dividend history via `ticker.dividends`.
+### Architecture Decisions
 
-**Dividend calculation:**
-- For each holding, find all dividends paid for that ticker between the purchase date and today.
-- Multiply each dividend amount by the number of shares held at that time (split-adjusted as of the dividend date).
-- Add a TOTAL_DIVIDENDS column per row in each portfolio table.
-- Display total dividends in the title bar alongside total invested and current value.
+1. **Dividend data persistence**: Dividend history is persisted to `data/dividends.csv` (columns: TICKER, DATE, AMOUNT). Uses the same staleness rule as splits — refresh once per trading day if the file was last modified before the most recent market close.
 
-**Design decisions:**
-- Dividends are tracked as cash received (not reinvested). DRIP will be a future enhancement requiring a cash account.
-- Dividend data is persisted and refreshed using the same pattern as splits for consistency.
+2. **Split-aware dividend calculation**: When calculating dividends for a holding, the share count is adjusted for any splits that occurred between the purchase date and each dividend date. This ensures dividend amounts reflect the actual shares held at the time of each payment.
 
-**Future enhancement:** Dividend reinvestment (DRIP) — all dividends will eventually be assumed reinvested, requiring a cash account to track.
+3. **Per-row and total display**: Each row in the portfolio tables includes a TOTAL_DIVIDENDS column. The title bar shows the portfolio-wide dividend total alongside total invested and current value.
+
+4. **Cash received model**: Dividends are tracked as cash received, not reinvested. DRIP will be a future enhancement requiring a cash account.
+
+5. **Consistent data refresh pattern**: Dividend sync follows the same pattern as splits — `sync_dividends()` mirrors `sync_splits()` for consistency and maintainability.
+
+### New/Modified Files
+- `portfolio_engine.py` — added `sync_dividends()`, `_fetch_dividends()`, `_read_dividends()`, `get_total_dividends()`; updated `enrich_portfolio()` to include TOTAL_DIVIDENDS
+- `app.py` — calls `sync_dividends()`, passes dividend totals to template
+- `templates/index.html` — title bar shows "Dividends $Z"; table includes TOTAL_DIVIDENDS column
+- `data/dividends.csv` — persisted dividend data (git-ignored)
+
+### Test Coverage (43 tests, all passing)
+- All Sprint 1 + 2 tests (33)
+- `get_total_dividends()`: no dividends, after purchase, before purchase ignored, with split before dividend, multiple dividends, wrong ticker
+- `sync_dividends()`: creates file, skips when fresh, no-op with no tickers
+- `enrich_portfolio()` with dividends: per-row TOTAL_DIVIDENDS and portfolio total
+
+### Known Limitations / Deferred to Future Sprints
+- **Dividend reinvestment (DRIP)**: All dividends will eventually be assumed reinvested, requiring a cash account to track funds received.
+- **Background refresh**: Dividend, split, and price refresh is triggered on page load. Eventually should be a background scheduled process.
