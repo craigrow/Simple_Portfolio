@@ -4,6 +4,7 @@ import csv
 import shutil
 import pytest
 from unittest.mock import patch
+import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import portfolio_engine
@@ -20,6 +21,7 @@ def setup_teardown(tmp_path):
     portfolio_engine.PORTFOLIO_FILE = str(data_dir / "portfolio.csv")
     portfolio_engine.SHADOW_VOO_FILE = str(data_dir / "shadow_voo.csv")
     portfolio_engine.SHADOW_QQQ_FILE = str(data_dir / "shadow_qqq.csv")
+    portfolio_engine.SPLITS_FILE = str(data_dir / "splits.csv")
 
     # Create transactions file with header
     with open(portfolio_engine.TRANSACTIONS_FILE, "w", newline="") as f:
@@ -41,6 +43,13 @@ def _mock_closing_price(ticker, date_str):
         ("QQQ", "2025-01-03"): 410.0,
     }
     return prices.get((ticker, date_str))
+
+
+MOCK_SPLITS = pd.DataFrame({
+    "TICKER": ["MSFT", "MSFT"],
+    "DATE": ["2025-01-03", "2025-06-01"],
+    "RATIO": [2.0, 3.0],
+})
 
 
 class TestReadCsv:
@@ -174,3 +183,101 @@ class TestLoadAll:
         assert len(p) == 1
         assert len(v) == 1
         assert len(q) == 1
+
+
+class TestLastMarketClose:
+    def test_returns_weekday(self):
+        close = portfolio_engine._last_market_close()
+        assert close.weekday() < 5  # Mon-Fri
+
+    def test_returns_4pm_et(self):
+        close = portfolio_engine._last_market_close()
+        assert close.hour == 16
+        assert close.minute == 0
+
+
+class TestGetAdjustedShares:
+    def test_no_splits(self):
+        empty = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        result = portfolio_engine.get_adjusted_shares("MSFT", 10.0, "2025-01-02", empty)
+        assert result == 10.0
+
+    def test_split_after_purchase(self):
+        result = portfolio_engine.get_adjusted_shares("MSFT", 10.0, "2025-01-02", MOCK_SPLITS)
+        # Two splits after 2025-01-02: 2x on 01-03, 3x on 06-01 => 10 * 2 * 3 = 60
+        assert result == 60.0
+
+    def test_split_before_purchase_ignored(self):
+        result = portfolio_engine.get_adjusted_shares("MSFT", 10.0, "2025-01-03", MOCK_SPLITS)
+        # Only the 06-01 split is after 01-03 => 10 * 3 = 30
+        assert result == 30.0
+
+    def test_no_splits_for_ticker(self):
+        result = portfolio_engine.get_adjusted_shares("AAPL", 10.0, "2025-01-02", MOCK_SPLITS)
+        assert result == 10.0
+
+    def test_fractional_shares_after_split(self):
+        result = portfolio_engine.get_adjusted_shares("MSFT", 3.14159, "2025-01-02", MOCK_SPLITS)
+        assert result == round(3.14159 * 2.0 * 3.0, 5)
+
+
+class TestSyncSplits:
+    @patch.object(portfolio_engine, "_fetch_splits", return_value=[["MSFT", "2025-01-03", 2.0]])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_creates_splits_file(self, mock_price, mock_splits):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        portfolio_engine.sync_splits()
+        assert os.path.exists(portfolio_engine.SPLITS_FILE)
+        df = pd.read_csv(portfolio_engine.SPLITS_FILE)
+        assert len(df) == 1
+        assert df.iloc[0]["TICKER"] == "MSFT"
+
+    @patch.object(portfolio_engine, "_fetch_splits", return_value=[])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_no_refresh_when_fresh(self, mock_price, mock_splits):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        portfolio_engine.sync_splits()
+        mock_splits.reset_mock()
+        portfolio_engine.sync_splits()
+        # Should not fetch again since file is fresh
+        mock_splits.assert_not_called()
+
+    def test_no_fetch_when_no_tickers(self):
+        result = portfolio_engine.sync_splits()
+        assert result is False
+
+
+class TestGetCurrentValues:
+    @patch.object(portfolio_engine, "_fetch_current_prices", return_value={"MSFT": 150.0})
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_calculates_current_value(self, mock_close, mock_prices):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        with open(portfolio_engine.SPLITS_FILE, "w", newline="") as f:
+            csv.writer(f).writerow(["TICKER", "DATE", "RATIO"])
+        portfolio = portfolio_engine.read_csv(portfolio_engine.PORTFOLIO_FILE)
+        enriched, value = portfolio_engine.enrich_portfolio(portfolio)
+        assert value == 1500.0
+        assert enriched.iloc[0]["CURRENT_SHARES"] == 10.0
+        assert enriched.iloc[0]["CURRENT_VALUE"] == 1500.0
+
+    @patch.object(portfolio_engine, "_fetch_current_prices", return_value={"MSFT": 150.0})
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_current_value_with_splits(self, mock_close, mock_prices):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync()
+        with open(portfolio_engine.SPLITS_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "RATIO"])
+            writer.writerow(["MSFT", "2025-06-01", 2.0])
+        portfolio = portfolio_engine.read_csv(portfolio_engine.PORTFOLIO_FILE)
+        enriched, value = portfolio_engine.enrich_portfolio(portfolio)
+        assert value == 3000.0
+        assert enriched.iloc[0]["CURRENT_SHARES"] == 20.0
+        assert enriched.iloc[0]["CURRENT_VALUE"] == 3000.0
+
+    def test_empty_portfolio_returns_zero(self):
+        enriched, value = portfolio_engine.enrich_portfolio(pd.DataFrame())
+        assert value == 0.0

@@ -19,6 +19,7 @@ def setup_teardown(tmp_path):
     portfolio_engine.PORTFOLIO_FILE = str(data_dir / "portfolio.csv")
     portfolio_engine.SHADOW_VOO_FILE = str(data_dir / "shadow_voo.csv")
     portfolio_engine.SHADOW_QQQ_FILE = str(data_dir / "shadow_qqq.csv")
+    portfolio_engine.SPLITS_FILE = str(data_dir / "splits.csv")
 
     with open(portfolio_engine.TRANSACTIONS_FILE, "w", newline="") as f:
         csv.writer(f).writerow(["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED"])
@@ -87,3 +88,11 @@ class TestIndexRoute:
         assert b"Shadow Portfolio" in resp.data
         assert b"VOO" in resp.data
         assert b"QQQ" in resp.data
+
+    @patch.object(portfolio_engine, "_fetch_current_prices", return_value={"MSFT": 150.0, "VOO": 550.0, "QQQ": 450.0})
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_displays_current_value(self, mock_close, mock_prices, client):
+        with open(portfolio_engine.TRANSACTIONS_FILE, "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        resp = client.get("/")
+        assert b"Current Value" in resp.data

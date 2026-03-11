@@ -1,5 +1,7 @@
 import os
 import csv
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas as pd
 
@@ -8,6 +10,7 @@ TRANSACTIONS_FILE = os.path.join(os.path.dirname(__file__), "transactions.csv")
 PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.csv")
 SHADOW_VOO_FILE = os.path.join(DATA_DIR, "shadow_voo.csv")
 SHADOW_QQQ_FILE = os.path.join(DATA_DIR, "shadow_qqq.csv")
+SPLITS_FILE = os.path.join(DATA_DIR, "splits.csv")
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
 
@@ -104,3 +107,154 @@ def load_all():
         read_csv(SHADOW_VOO_FILE),
         read_csv(SHADOW_QQQ_FILE),
     )
+
+
+def _last_market_close():
+    """Return the datetime of the most recent 4 PM ET market close."""
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    # If it's before today's close, look at previous days
+    if now < close_today:
+        candidate = close_today - timedelta(days=1)
+    else:
+        candidate = close_today
+
+    # Walk back to a weekday (Mon-Fri)
+    while candidate.weekday() >= 5:  # 5=Sat, 6=Sun
+        candidate -= timedelta(days=1)
+
+    return candidate
+
+
+def _get_all_tickers():
+    """Return set of all tickers across all three portfolios."""
+    tickers = set()
+    for path in [PORTFOLIO_FILE, SHADOW_VOO_FILE, SHADOW_QQQ_FILE]:
+        df = read_csv(path)
+        if not df.empty:
+            tickers.update(df["TICKER"].unique())
+    return tickers
+
+
+def _fetch_splits(tickers):
+    """Fetch split history for a set of tickers. Returns list of [TICKER, DATE, RATIO] rows."""
+    rows = []
+    for ticker in tickers:
+        t = yf.Ticker(ticker)
+        splits = t.splits
+        if splits is not None and len(splits) > 0:
+            for date, ratio in splits.items():
+                date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
+                rows.append([ticker, date_str, float(ratio)])
+    return rows
+
+
+def sync_splits():
+    """Refresh split data if stale (last modified before most recent market close)."""
+    last_close = _last_market_close()
+
+    if os.path.exists(SPLITS_FILE):
+        mtime = datetime.fromtimestamp(
+            os.path.getmtime(SPLITS_FILE), tz=ZoneInfo("America/New_York")
+        )
+        if mtime >= last_close:
+            return False  # Still fresh
+
+    tickers = _get_all_tickers()
+    if not tickers:
+        return False
+
+    rows = _fetch_splits(tickers)
+    os.makedirs(os.path.dirname(SPLITS_FILE), exist_ok=True)
+    with open(SPLITS_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["TICKER", "DATE", "RATIO"])
+        for row in rows:
+            writer.writerow(row)
+
+    return True
+
+
+def _read_splits():
+    """Read splits.csv into a DataFrame."""
+    if not os.path.exists(SPLITS_FILE):
+        return pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+    return pd.read_csv(SPLITS_FILE)
+
+
+def get_adjusted_shares(ticker, shares, purchase_date, splits_df):
+    """Apply all splits for ticker that occurred after purchase_date."""
+    if splits_df.empty:
+        return shares
+    ticker_splits = splits_df[splits_df["TICKER"] == ticker]
+    for _, split in ticker_splits.iterrows():
+        if split["DATE"] > purchase_date:
+            shares *= split["RATIO"]
+    return round(shares, 5)
+
+
+def get_current_values(portfolio_df):
+    """Calculate total current value of a portfolio, adjusted for splits."""
+    if portfolio_df.empty:
+        return 0.0
+
+    splits_df = _read_splits()
+    tickers = portfolio_df["TICKER"].unique().tolist()
+
+    # Batch fetch current prices
+    current_prices = _fetch_current_prices(tickers)
+
+    total = 0.0
+    for _, row in portfolio_df.iterrows():
+        ticker = row["TICKER"]
+        shares = get_adjusted_shares(
+            ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df
+        )
+        price = current_prices.get(ticker, 0.0)
+        total += shares * price
+
+    return round(total, 2)
+
+
+def enrich_portfolio(portfolio_df):
+    """Add CURRENT_SHARES and CURRENT_VALUE columns to a portfolio DataFrame."""
+    if portfolio_df.empty:
+        return portfolio_df, 0.0
+
+    splits_df = _read_splits()
+    tickers = portfolio_df["TICKER"].unique().tolist()
+    current_prices = _fetch_current_prices(tickers)
+
+    current_shares = []
+    current_values = []
+    for _, row in portfolio_df.iterrows():
+        ticker = row["TICKER"]
+        adj = get_adjusted_shares(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df)
+        price = current_prices.get(ticker, 0.0)
+        current_shares.append(adj)
+        current_values.append(round(adj * price, 2))
+
+    enriched = portfolio_df.copy()
+    enriched["CURRENT_SHARES"] = current_shares
+    enriched["CURRENT_VALUE"] = current_values
+    return enriched, round(sum(current_values), 2)
+
+
+def _fetch_current_prices(tickers):
+    """Fetch current prices for a list of tickers. Returns dict of ticker -> price."""
+    if not tickers:
+        return {}
+    data = yf.download(tickers, period="1d", progress=False)
+    prices = {}
+    if len(tickers) == 1:
+        if not data.empty:
+            prices[tickers[0]] = round(float(data["Close"].iloc[-1].iloc[0]), 2)
+    else:
+        for ticker in tickers:
+            try:
+                prices[ticker] = round(float(data["Close"][ticker].iloc[-1]), 2)
+            except (KeyError, IndexError):
+                pass
+    return prices

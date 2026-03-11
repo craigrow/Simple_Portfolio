@@ -17,8 +17,8 @@
 <body>
     <h1>Simple Portfolio Tracker</h1>
 
-    {% macro render_table(title, rows, columns) %}
-    <h2>{{ title }}{% if rows %}: Total Invested ${{ "%.2f"|format(rows|sum(attribute='TOTAL_VALUE')) }}{% endif %}</h2>
+    {% macro render_table(title, rows, columns, current_value) %}
+    <h2>{{ title }}{% if rows %}: Total Invested ${{ "%.2f"|format(rows|sum(attribute='TOTAL_VALUE')) }} | Current Value ${{ "%.2f"|format(current_value) }}{% endif %}</h2>
     {% if rows %}
     <table>
         <thead>
@@ -39,8 +39,8 @@
     {% endif %}
     {% endmacro %}
 
-    {{ render_table("Main Portfolio", portfolio, columns) }}
-    {{ render_table("Shadow Portfolio — VOO (S&P 500)", shadow_voo, columns) }}
-    {{ render_table("Shadow Portfolio — QQQ (NASDAQ)", shadow_qqq, columns) }}
+    {{ render_table("Main Portfolio", portfolio, columns, portfolio_value) }}
+    {{ render_table("Shadow Portfolio — VOO (S&P 500)", shadow_voo, columns, voo_value) }}
+    {{ render_table("Shadow Portfolio — QQQ (NASDAQ)", shadow_qqq, columns, qqq_value) }}
 </body>
 </html>
