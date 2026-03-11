@@ -49,6 +49,14 @@ def _build_shadow_row(date_str, shadow_ticker, total_value):
 
 def _append_rows(path, rows):
     _ensure_file(path)
+    # Ensure file ends with a newline before appending
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        if f.tell() > 0:
+            f.seek(-1, 2)
+            if f.read(1) != b"\n":
+                with open(path, "a") as fa:
+                    fa.write("\n")
     with open(path, "a", newline="") as f:
         writer = csv.writer(f)
         for row in rows:
@@ -228,14 +236,15 @@ def get_total_dividends(ticker, shares, purchase_date, splits_df, dividends_df):
     """Calculate total dividends received for a holding since purchase date."""
     if dividends_df.empty:
         return 0.0
-    ticker_divs = dividends_df[
-        (dividends_df["TICKER"] == ticker) & (dividends_df["DATE"] > purchase_date)
-    ]
+    purchase_dt = pd.to_datetime(purchase_date)
+    ticker_divs = dividends_df[dividends_df["TICKER"] == ticker].copy()
+    ticker_divs = ticker_divs[ticker_divs["DATE"].apply(lambda d: pd.to_datetime(d) > purchase_dt)]
     total = 0.0
     for _, div in ticker_divs.iterrows():
         # Shares held at time of dividend = original shares adjusted for splits before dividend date
-        adj_shares = get_adjusted_shares(ticker, shares, purchase_date,
-            splits_df[splits_df["DATE"] <= div["DATE"]])
+        div_dt = pd.to_datetime(div["DATE"])
+        relevant_splits = splits_df[splits_df["DATE"].apply(lambda d: pd.to_datetime(d) <= div_dt)]
+        adj_shares = get_adjusted_shares(ticker, shares, purchase_date, relevant_splits)
         total += adj_shares * div["AMOUNT"]
     return round(total, 2)
 
@@ -251,9 +260,10 @@ def get_adjusted_shares(ticker, shares, purchase_date, splits_df):
     """Apply all splits for ticker that occurred after purchase_date."""
     if splits_df.empty:
         return shares
+    purchase_dt = pd.to_datetime(purchase_date)
     ticker_splits = splits_df[splits_df["TICKER"] == ticker]
     for _, split in ticker_splits.iterrows():
-        if split["DATE"] > purchase_date:
+        if pd.to_datetime(split["DATE"]) > purchase_dt:
             shares *= split["RATIO"]
     return round(shares, 5)
 

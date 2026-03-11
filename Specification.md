@@ -1,6 +1,10 @@
 # Simple Portfolio Tracker
 ### Technical Specification
 
+### Source Control
+- **Repository**: https://github.com/craigrow/Simple_Portfolio.git
+- **Branching policy**: All work must be done in a feature branch, never directly on `main`. Merge to `main` via pull request only after all tests pass.
+
 ### Overview
 The goal of the simple portfolio tracker is to show how a set of portfolio transactions performed against the S&P 500 and the NASDAQ. To achieve this, we will create shadow portfolios for VOO and QQQ. For each portfolio investment, we will assume the same dollar amount was invested in VOO and QQQ. 
 
@@ -175,3 +179,16 @@ As a user, I want the app to find all the dividends that have been paid, in the 
 ### Known Limitations / Deferred to Future Sprints
 - **Dividend reinvestment (DRIP)**: All dividends will eventually be assumed reinvested, requiring a cash account to track funds received.
 - **Background refresh**: Dividend, split, and price refresh is triggered on page load. Eventually should be a background scheduled process.
+
+---
+
+## Bug Fixes (Post-Sprint 3)
+
+### Fix: CSV append missing newline
+`_append_rows()` opened files in append mode but did not verify the existing file ended with a newline. When the last line lacked a trailing newline, the first appended row was concatenated onto it, corrupting the CSV and causing a `ParserError`. Fixed by checking for and adding a trailing newline before appending.
+
+### Fix: Date comparison in split and dividend logic
+`get_adjusted_shares()` and `get_total_dividends()` compared split/dividend dates (`YYYY-MM-DD` format) against portfolio purchase dates (`M/D/YY` format) as raw strings. This produced incorrect results — purchases with dates starting with digits greater than `2` (e.g. `8/17/20`) had no splits applied, while dates starting with `1` had all historical splits applied including those before the purchase. Fixed by using `pd.to_datetime()` to parse both dates before comparison.
+
+### Enhancement: Thousand separators in header values
+Title bar dollar amounts (Total Invested, Current Value, Dividends) now display with comma thousand separators (e.g. `$11,358.40`).
