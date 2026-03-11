@@ -8,3 +8,4 @@ data/shadow_qqq.csv
 flask.log
 data/dividends.csv
 data/splits.csv
+data/price_history.csv

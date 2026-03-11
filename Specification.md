@@ -213,3 +213,30 @@ As a user, I want the portfolio summary data for the main portfolio and the shad
 
 ### Test Coverage (43 tests, all passing)
 - All previous tests (43), with `test_displays_total_invested` updated for comma formatting
+
+### User Story #5
+As a user, I want to see the total value of my portfolio (share value + dividends paid), at the end of trading, for every trading day from the first purchase so that I can understand performance over time.
+
+### Status: Complete
+
+### Architecture Decisions
+
+1. **Single price download**: `fetch_all_history()` collects all unique tickers across all three portfolios and makes one `yf.download()` call. The same price data is reused for enrichment and historical value calculation — no redundant API calls.
+
+2. **Price history caching**: Historical prices are persisted to `data/price_history.csv`. On subsequent loads, only a delta fetch is performed (from last cached date to today). New tickers trigger a full history fetch; existing tickers with incomplete early data are automatically detected and refetched.
+
+3. **Vectorized historical calculation**: `get_historical_values()` iterates over holdings (not trading days) and uses vectorized pandas operations across all dates. This is O(holdings) instead of O(holdings × trading_days).
+
+4. **Chart.js visualization**: A line chart (via Chart.js CDN) is rendered below the summary table showing all three portfolios over time. Blue = Main, Green = VOO, Red = QQQ.
+
+5. **Daily value table**: A detailed table below the chart shows the exact daily values for all three portfolios.
+
+### New/Modified Files
+- `portfolio_engine.py` — added `fetch_all_history()` (with caching), `get_historical_values()`, `PRICE_HISTORY_FILE`; updated `enrich_portfolio()` to accept pre-loaded splits, dividends, and prices
+- `app.py` — single price download shared across enrichment and history; passes history data to template
+- `templates/index.html` — Chart.js line chart and daily value table
+- `.gitignore` — added `data/price_history.csv`
+- `tests/test_app.py`, `tests/test_portfolio_engine.py` — added `PRICE_HISTORY_FILE` to test fixtures to prevent cache pollution
+
+### Test Coverage (43 tests, all passing)
+- All previous tests (43), with test fixtures updated for price history cache isolation

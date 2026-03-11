@@ -13,6 +13,7 @@
         h2 { margin-top: 2rem; }
         .empty { color: #888; font-style: italic; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <h1>Simple Portfolio Tracker</h1>
@@ -28,6 +29,33 @@
             <tr><td style="text-align:left">Shadow — QQQ (NASDAQ)</td><td>${{ "{:,.2f}".format(qqq_invested) }}</td><td>${{ "{:,.2f}".format(qqq_value) }}</td><td>${{ "{:,.2f}".format(qqq_divs) }}</td><td>${{ "{:,.2f}".format(main_total - (qqq_value + qqq_divs)) }}</td></tr>
         </tbody>
     </table>
+
+    {% if history %}
+    <canvas id="historyChart" style="max-height:400px; margin-bottom:2rem;"></canvas>
+    <script>
+    new Chart(document.getElementById("historyChart"), {
+        type: "line",
+        data: {
+            labels: {{ history|map(attribute='DATE')|list|tojson }},
+            datasets: [
+                {label: "Main Portfolio", data: {{ history|map(attribute='MAIN')|list|tojson }}, borderColor: "#2563eb", borderWidth: 2, pointRadius: 0, fill: false},
+                {label: "VOO (S&P 500)", data: {{ history|map(attribute='VOO')|list|tojson }}, borderColor: "#16a34a", borderWidth: 2, pointRadius: 0, fill: false},
+                {label: "QQQ (NASDAQ)", data: {{ history|map(attribute='QQQ')|list|tojson }}, borderColor: "#dc2626", borderWidth: 2, pointRadius: 0, fill: false}
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: {ticks: {maxTicksLimit: 12}},
+                y: {ticks: {callback: v => "$" + v.toLocaleString()}}
+            },
+            plugins: {
+                tooltip: {callbacks: {label: ctx => ctx.dataset.label + ": $" + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2})}}
+            }
+        }
+    });
+    </script>
+    {% endif %}
 
     {% macro render_table(title, rows, columns, current_value, total_divs) %}
     <h2>{{ title }}{% if rows %}: Total Invested ${{ "{:,.2f}".format(rows|sum(attribute='TOTAL_VALUE')) }} | Current Value ${{ "{:,.2f}".format(current_value) }} | Dividends ${{ "{:,.2f}".format(total_divs) }}{% endif %}</h2>
@@ -54,5 +82,19 @@
     {{ render_table("Main Portfolio", portfolio, columns, portfolio_value, portfolio_divs) }}
     {{ render_table("Shadow Portfolio — VOO (S&P 500)", shadow_voo, columns, voo_value, voo_divs) }}
     {{ render_table("Shadow Portfolio — QQQ (NASDAQ)", shadow_qqq, columns, qqq_value, qqq_divs) }}
+
+    {% if history %}
+    <h2>Daily Portfolio Value (Share Value + Dividends)</h2>
+    <table>
+        <thead>
+            <tr><th>Date</th><th>Main Portfolio</th><th>VOO</th><th>QQQ</th></tr>
+        </thead>
+        <tbody>
+            {% for row in history %}
+            <tr><td>{{ row.DATE }}</td><td>${{ "{:,.2f}".format(row.MAIN) }}</td><td>${{ "{:,.2f}".format(row.VOO) }}</td><td>${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
 </body>
 </html>

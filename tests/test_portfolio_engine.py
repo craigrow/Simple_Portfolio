@@ -23,6 +23,7 @@ def setup_teardown(tmp_path):
     portfolio_engine.SHADOW_QQQ_FILE = str(data_dir / "shadow_qqq.csv")
     portfolio_engine.SPLITS_FILE = str(data_dir / "splits.csv")
     portfolio_engine.DIVIDENDS_FILE = str(data_dir / "dividends.csv")
+    portfolio_engine.PRICE_HISTORY_FILE = str(data_dir / "price_history.csv")
 
     # Create transactions file with header
     with open(portfolio_engine.TRANSACTIONS_FILE, "w", newline="") as f:

@@ -291,15 +291,18 @@ def get_current_values(portfolio_df):
     return round(total, 2)
 
 
-def enrich_portfolio(portfolio_df):
+def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_prices=None):
     """Add CURRENT_SHARES, CURRENT_VALUE, and TOTAL_DIVIDENDS columns."""
     if portfolio_df.empty:
         return portfolio_df, 0.0, 0.0
 
-    splits_df = _read_splits()
-    dividends_df = _read_dividends()
-    tickers = portfolio_df["TICKER"].unique().tolist()
-    current_prices = _fetch_current_prices(tickers)
+    if splits_df is None:
+        splits_df = _read_splits()
+    if dividends_df is None:
+        dividends_df = _read_dividends()
+    if current_prices is None:
+        tickers = portfolio_df["TICKER"].unique().tolist()
+        current_prices = _fetch_current_prices(tickers)
 
     current_shares = []
     current_values = []
@@ -336,3 +339,129 @@ def _fetch_current_prices(tickers):
             except (KeyError, IndexError):
                 pass
     return prices
+
+
+PRICE_HISTORY_FILE = os.path.join(DATA_DIR, "price_history.csv")
+
+
+def fetch_all_history(portfolios, splits_df, dividends_df):
+    """Fetch historical closing prices, using cache where possible.
+
+    Returns a DataFrame of closing prices indexed by date, with one column per ticker.
+    """
+    all_tickers = set()
+    earliest = None
+    for df in portfolios:
+        if df.empty:
+            continue
+        all_tickers.update(df["TICKER"].unique())
+        first = pd.to_datetime(df["DATE"]).min()
+        if earliest is None or first < earliest:
+            earliest = first
+    if not all_tickers or earliest is None:
+        return pd.DataFrame()
+
+    needed = sorted(all_tickers)
+
+    # Load cache
+    cached = None
+    if os.path.exists(PRICE_HISTORY_FILE):
+        cached = pd.read_csv(PRICE_HISTORY_FILE, index_col=0, parse_dates=True)
+
+    last_close = _last_market_close()
+    new_tickers = []
+    existing_tickers = []
+    for t in needed:
+        if cached is None or t not in cached.columns:
+            new_tickers.append(t)
+        else:
+            # If cached data for this ticker starts much later than earliest purchase, refetch
+            first_valid = cached[t].first_valid_index()
+            if first_valid is None or first_valid > earliest + pd.Timedelta(days=7):
+                new_tickers.append(t)
+            else:
+                existing_tickers.append(t)
+
+    frames = []
+
+    # Full fetch for new tickers (or tickers with incomplete cache)
+    if new_tickers:
+        data = yf.download(new_tickers, start=earliest.strftime("%Y-%m-%d"), progress=False)["Close"]
+        if isinstance(data, pd.Series):
+            data = data.to_frame(name=new_tickers[0])
+        frames.append(data)
+        # Drop these columns from cache if they existed with bad data
+        if cached is not None:
+            cached = cached.drop(columns=[t for t in new_tickers if t in cached.columns], errors="ignore")
+
+    # Delta fetch for existing tickers if stale
+    if existing_tickers and cached is not None:
+        last_cached = cached.index.max()
+        if last_cached.tzinfo is None:
+            last_cached = last_cached.tz_localize("America/New_York")
+        if last_cached < last_close:
+            start = (last_cached + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            delta = yf.download(existing_tickers, start=start, progress=False)
+            if not delta.empty:
+                delta_close = delta["Close"]
+                if isinstance(delta_close, pd.Series):
+                    delta_close = delta_close.to_frame(name=existing_tickers[0])
+                # Append new rows to cached existing columns
+                existing_cached = cached[existing_tickers]
+                frames.append(pd.concat([existing_cached, delta_close]))
+            else:
+                frames.append(cached[existing_tickers])
+        else:
+            frames.append(cached[existing_tickers])
+
+    if not frames:
+        return pd.DataFrame()
+
+    result = pd.concat(frames, axis=1)
+    result = result[~result.index.duplicated(keep="last")].sort_index()
+
+    # Save cache
+    os.makedirs(DATA_DIR, exist_ok=True)
+    result.to_csv(PRICE_HISTORY_FILE)
+
+    return result
+
+
+def get_historical_values(portfolio_df, splits_df, dividends_df, prices_df):
+    """Return a list of dicts with DATE and VALUE for each trading day."""
+    if portfolio_df.empty or prices_df.empty:
+        return []
+
+    dates = prices_df.index
+    totals = pd.Series(0.0, index=dates)
+
+    for _, row in portfolio_df.iterrows():
+        ticker = row["TICKER"]
+        purchase_dt = pd.to_datetime(row["DATE"])
+        shares = float(row["SHARES_PURCHASED"])
+
+        if ticker not in prices_df.columns:
+            continue
+
+        # Get split-adjusted share count (same for all dates after last split)
+        adj = get_adjusted_shares(ticker, shares, row["DATE"], splits_df)
+
+        # Price series for this ticker, zero before purchase
+        price_series = prices_df[ticker].fillna(0.0)
+        mask = dates >= purchase_dt
+        totals += price_series * adj * mask
+
+        # Add cumulative dividends
+        if not dividends_df.empty:
+            ticker_divs = dividends_df[
+                (dividends_df["TICKER"] == ticker) &
+                (dividends_df["DATE"].apply(lambda d: pd.to_datetime(d) > purchase_dt))
+            ]
+            for _, div in ticker_divs.iterrows():
+                div_dt = pd.to_datetime(div["DATE"])
+                div_adj = get_adjusted_shares(ticker, shares, row["DATE"], splits_df)
+                div_amount = div_adj * div["AMOUNT"]
+                totals += div_amount * (dates >= div_dt)
+
+    return [{"DATE": d.strftime("%Y-%m-%d"), "VALUE": round(v, 2)}
+            for d, v in totals.items()]
