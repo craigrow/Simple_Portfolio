@@ -107,25 +107,60 @@ python -m pytest tests/ -v
 ### User Story #2
 As a user I want the app to calculate the current value of my portfolio and of the shadow portfolios and display that in the title bar above each portfolio. Note: the app should account for any splits which have occured since the purchases were made. Splits may have happened in portfolio securities and/or in the shadow securities, VOO and QQQ.
 
+### Status: Complete
+
+### Architecture Decisions
+
+1. **Split data persistence**: Split history is persisted to `data/splits.csv` (columns: TICKER, DATE, RATIO). yfinance always returns full split history per ticker, so we overwrite rather than append.
+
+2. **Staleness rule**: Splits are refreshed once per trading day. If `splits.csv` was last modified before the most recent market close (4:00 PM ET on the last trading day), re-fetch for all tickers. This avoids unnecessary API calls while ensuring we catch new splits within one trading day.
+
+3. **Current prices fetched live**: Current prices are fetched on each page load via a batched `yf.download()` call for all unique tickers across all three portfolios. This is acceptable for localhost; caching may be needed when hosted.
+
+4. **Per-row enrichment**: Rather than just portfolio totals, each row is enriched with CURRENT_SHARES (split-adjusted) and CURRENT_VALUE (adjusted shares × current price). The `enrich_portfolio()` function handles this and also returns the portfolio total.
+
+5. **Split adjustment logic**: For each holding, all splits after the purchase date are applied multiplicatively to the original share count. Splits before the purchase date are ignored (the purchase price already reflects them).
+
+### New/Modified Files
+- `portfolio_engine.py` — added `_last_market_close()`, `sync_splits()`, `_fetch_splits()`, `_read_splits()`, `get_adjusted_shares()`, `enrich_portfolio()`, `_fetch_current_prices()`
+- `app.py` — calls `sync_splits()` and `enrich_portfolio()` for each portfolio
+- `templates/index.html` — title bar shows "Total Invested $X | Current Value $Y"; table includes CURRENT_SHARES and CURRENT_VALUE columns
+- `data/splits.csv` — persisted split data (git-ignored)
+
+### Test Coverage (33 tests, all passing)
+- All Sprint 1 tests (19)
+- `_last_market_close()`: returns weekday, returns 4 PM ET
+- `get_adjusted_shares()`: no splits, split after purchase, split before purchase ignored, wrong ticker ignored, fractional shares
+- `sync_splits()`: creates file, skips when fresh, no-op with no tickers
+- `enrich_portfolio()`: current value calculation, current value with splits, per-row CURRENT_SHARES/CURRENT_VALUE, empty portfolio
+
+### Known Limitations / Deferred to Future Sprints
+- **Holiday awareness**: `_last_market_close()` handles weekends but not market holidays. A transaction or staleness check on a holiday may behave slightly off. Acceptable for now.
+- **Background refresh**: Split and price refresh is triggered on page load. Eventually should be a background scheduled process.
+- **Price caching**: Current prices are fetched on every page load. May need caching for hosted deployment.
+
+---
+
+## Sprint 3
+
+### User Story #3
+As a user, I want the app to find all the dividends that have been paid, in the main portfolio and the shadow portfolios, sum them up and display that in the title bar so that I can understand not just the price appreciation v. the indexes but the value of dividends v. the index.
+
 ### Implementation Plan
 
-**Split data management:**
-- Split history for all portfolio tickers is persisted to `data/splits.csv` (columns: TICKER, DATE, RATIO).
-- Splits are refreshed once per trading day: if `splits.csv` was last modified before the most recent market close (4:00 PM ET on the last trading day), re-fetch splits for all tickers across all three portfolios and rewrite the file.
-- yfinance always returns full split history per ticker, so we overwrite rather than append.
+**Dividend data management:**
+- Dividend history for all portfolio tickers is persisted to `data/dividends.csv` (columns: TICKER, DATE, AMOUNT).
+- Uses the same staleness rule as splits: refresh once per trading day if the file was last modified before the most recent market close.
+- yfinance provides full dividend history via `ticker.dividends`.
 
-**Current value calculation:**
-- On each page load, fetch current prices for all unique tickers via a batched `yf.download()` call.
-- For each holding, adjust share count by applying any splits that occurred after the purchase date.
-- Current value = adjusted shares × current price, summed per portfolio.
+**Dividend calculation:**
+- For each holding, find all dividends paid for that ticker between the purchase date and today.
+- Multiply each dividend amount by the number of shares held at that time (split-adjusted as of the dividend date).
+- Add a TOTAL_DIVIDENDS column per row in each portfolio table.
+- Display total dividends in the title bar alongside total invested and current value.
 
-**Display:**
-- Each portfolio title bar shows total invested and current value, e.g.: "Main Portfolio: Total Invested $696.28 | Current Value $1,042.15"
+**Design decisions:**
+- Dividends are tracked as cash received (not reinvested). DRIP will be a future enhancement requiring a cash account.
+- Dividend data is persisted and refreshed using the same pattern as splits for consistency.
 
-**New functions in `portfolio_engine.py`:**
-- `_last_market_close()` — returns the datetime of the most recent 4 PM ET market close.
-- `sync_splits()` — fetches and persists split data if stale (before last market close).
-- `get_adjusted_shares(ticker, shares, purchase_date, splits_df)` — applies post-purchase splits to a share count.
-- `get_current_values(portfolio_df)` — fetches current prices, adjusts for splits, returns total current value.
-
-**Future enhancement:** Eventually, split and price refresh should be handled by a background process on a schedule rather than triggered on page load.
+**Future enhancement:** Dividend reinvestment (DRIP) — all dividends will eventually be assumed reinvested, requiring a cash account to track.
