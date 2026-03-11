@@ -69,7 +69,7 @@ class TestIndexRoute:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/")
         assert b"Total Invested" in resp.data
-        assert b"$1000.00" in resp.data
+        assert b"$1,000.00" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_syncs_on_page_load(self, mock_price, client):

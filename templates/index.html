@@ -17,6 +17,18 @@
 <body>
     <h1>Simple Portfolio Tracker</h1>
 
+    <table>
+        <thead>
+            <tr><th style="text-align:left"></th><th>Total Invested</th><th>Current Value</th><th>Dividends</th><th>Difference</th></tr>
+        </thead>
+        {% set main_total = portfolio_value + portfolio_divs %}
+        <tbody>
+            <tr><td style="text-align:left">Main Portfolio</td><td>${{ "{:,.2f}".format(portfolio_invested) }}</td><td>${{ "{:,.2f}".format(portfolio_value) }}</td><td>${{ "{:,.2f}".format(portfolio_divs) }}</td><td>—</td></tr>
+            <tr><td style="text-align:left">Shadow — VOO (S&amp;P 500)</td><td>${{ "{:,.2f}".format(voo_invested) }}</td><td>${{ "{:,.2f}".format(voo_value) }}</td><td>${{ "{:,.2f}".format(voo_divs) }}</td><td>${{ "{:,.2f}".format(main_total - (voo_value + voo_divs)) }}</td></tr>
+            <tr><td style="text-align:left">Shadow — QQQ (NASDAQ)</td><td>${{ "{:,.2f}".format(qqq_invested) }}</td><td>${{ "{:,.2f}".format(qqq_value) }}</td><td>${{ "{:,.2f}".format(qqq_divs) }}</td><td>${{ "{:,.2f}".format(main_total - (qqq_value + qqq_divs)) }}</td></tr>
+        </tbody>
+    </table>
+
     {% macro render_table(title, rows, columns, current_value, total_divs) %}
     <h2>{{ title }}{% if rows %}: Total Invested ${{ "{:,.2f}".format(rows|sum(attribute='TOTAL_VALUE')) }} | Current Value ${{ "{:,.2f}".format(current_value) }} | Dividends ${{ "{:,.2f}".format(total_divs) }}{% endif %}</h2>
     {% if rows %}

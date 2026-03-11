@@ -192,3 +192,24 @@ As a user, I want the app to find all the dividends that have been paid, in the 
 
 ### Enhancement: Thousand separators in header values
 Title bar dollar amounts (Total Invested, Current Value, Dividends) now display with comma thousand separators (e.g. `$11,358.40`).
+
+### User Story #4
+As a user, I want the portfolio summary data for the main portfolio and the shadow portfolios at the top of the page so I don't have to scroll down to compare portfolios.
+
+### Status: Complete
+
+### Architecture Decisions
+
+1. **Summary table at top of page**: A comparison table is rendered above the detailed portfolio tables showing all three portfolios side by side. This avoids scrolling to compare performance.
+
+2. **Difference column**: The summary table includes a "Difference" column calculated as (Main current value + dividends) − (Shadow current value + dividends). Positive means the main portfolio outperforms; negative means the shadow outperforms. The Main Portfolio row shows "—" since it is the baseline.
+
+3. **Total invested passed from app.py**: Rather than recomputing totals in the template, `app.py` passes pre-computed `portfolio_invested`, `voo_invested`, and `qqq_invested` values.
+
+### Modified Files
+- `app.py` — passes total invested values to template
+- `templates/index.html` — summary comparison table with Total Invested, Current Value, Dividends, and Difference columns
+- `tests/test_app.py` — updated test to expect comma-formatted dollar amounts
+
+### Test Coverage (43 tests, all passing)
+- All previous tests (43), with `test_displays_total_invested` updated for comma formatting

@@ -26,6 +26,9 @@ def index():
         portfolio_divs=portfolio_divs,
         voo_divs=voo_divs,
         qqq_divs=qqq_divs,
+        portfolio_invested=portfolio["TOTAL_VALUE"].sum() if not portfolio.empty else 0.0,
+        voo_invested=shadow_voo["TOTAL_VALUE"].sum() if not shadow_voo.empty else 0.0,
+        qqq_invested=shadow_qqq["TOTAL_VALUE"].sum() if not shadow_qqq.empty else 0.0,
     )
 
 
