@@ -6,3 +6,5 @@ data/portfolio.csv
 data/shadow_voo.csv
 data/shadow_qqq.csv
 flask.log
+data/dividends.csv
+data/splits.csv
