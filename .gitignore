@@ -5,3 +5,4 @@ __pycache__/
 data/portfolio.csv
 data/shadow_voo.csv
 data/shadow_qqq.csv
+flask.log
