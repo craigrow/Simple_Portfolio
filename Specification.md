@@ -101,3 +101,31 @@ python -m pytest tests/ -v
 - **No auto-refresh**: User must manually refresh the browser to see updates.
 - **No duplicate detection**: If the same transaction is entered twice in `transactions.csv`, both will be processed.
 - **Clearing data**: To re-sync from scratch, delete the three CSV files in `data/` and reload the page.
+
+## Sprint 2
+
+### User Story #2
+As a user I want the app to calculate the current value of my portfolio and of the shadow portfolios and display that in the title bar above each portfolio. Note: the app should account for any splits which have occured since the purchases were made. Splits may have happened in portfolio securities and/or in the shadow securities, VOO and QQQ.
+
+### Implementation Plan
+
+**Split data management:**
+- Split history for all portfolio tickers is persisted to `data/splits.csv` (columns: TICKER, DATE, RATIO).
+- Splits are refreshed once per trading day: if `splits.csv` was last modified before the most recent market close (4:00 PM ET on the last trading day), re-fetch splits for all tickers across all three portfolios and rewrite the file.
+- yfinance always returns full split history per ticker, so we overwrite rather than append.
+
+**Current value calculation:**
+- On each page load, fetch current prices for all unique tickers via a batched `yf.download()` call.
+- For each holding, adjust share count by applying any splits that occurred after the purchase date.
+- Current value = adjusted shares × current price, summed per portfolio.
+
+**Display:**
+- Each portfolio title bar shows total invested and current value, e.g.: "Main Portfolio: Total Invested $696.28 | Current Value $1,042.15"
+
+**New functions in `portfolio_engine.py`:**
+- `_last_market_close()` — returns the datetime of the most recent 4 PM ET market close.
+- `sync_splits()` — fetches and persists split data if stale (before last market close).
+- `get_adjusted_shares(ticker, shares, purchase_date, splits_df)` — applies post-purchase splits to a share count.
+- `get_current_values(portfolio_df)` — fetches current prices, adjusts for splits, returns total current value.
+
+**Future enhancement:** Eventually, split and price refresh should be handled by a background process on a schedule rather than triggered on page load.
