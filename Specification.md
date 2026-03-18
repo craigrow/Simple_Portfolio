@@ -240,3 +240,81 @@ As a user, I want to see the total value of my portfolio (share value + dividend
 
 ### Test Coverage (43 tests, all passing)
 - All previous tests (43), with test fixtures updated for price history cache isolation
+
+### User Story #6
+As a user, I want to be able to track multiple portfolios so I can keep track of all my portfolios which have different investments, goal, objectives and purposes. I want to be able to switch simply between portfolios, which are tracked separately but all reported on in the same way, with shadow portfolios, etc.
+
+### Status: In Progress
+
+### Architecture Decisions
+
+1. **Folder-per-portfolio structure**: Each portfolio is a self-contained folder under `portfolios/`. This keeps portfolios fully isolated — no risk of cross-contamination, easy to back up or delete, and straightforward to extend with future "create/rename/delete portfolio" UI features.
+
+2. **Portfolio identity**: Each portfolio folder contains a `config.json` with a `name` field for the display name. The folder name serves as the internal ID (used in URLs and file paths). Portfolio names are defined in code for now; a future story will allow users to create and rename portfolios from the UI.
+
+3. **Engine parameterization**: Module-level file path constants are replaced with a `get_paths(portfolio_id)` function that returns all file paths for a given portfolio. All existing engine functions remain unchanged — they just operate on the paths returned for the selected portfolio.
+
+4. **Web UI switching**: A dropdown at the top of the page lists all available portfolios by display name. Selecting a portfolio reloads the page with a `?portfolio=<folder_name>` query parameter. The rest of the page (summary table, chart, detail tables) renders identically regardless of which portfolio is selected.
+
+5. **Migration**: The existing `transactions.csv` and `data/` contents are moved into `portfolios/tqqq_portfolio/`. The root-level `transactions.csv` and `data/` directory are removed. The existing portfolio is named "TQQQ Portfolio".
+
+6. **Default portfolio**: If no `?portfolio=` parameter is provided, the app defaults to the first portfolio alphabetically.
+
+### New Project Structure
+```
+Simple_Portfolio/
+├── portfolios/
+│   ├── tqqq_portfolio/
+│   │   ├── config.json              # {"name": "TQQQ Portfolio"}
+│   │   ├── transactions.csv         # User-edited input
+│   │   └── data/
+│   │       ├── portfolio.csv
+│   │       ├── shadow_voo.csv
+│   │       ├── shadow_qqq.csv
+│   │       ├── splits.csv
+│   │       ├── dividends.csv
+│   │       └── price_history.csv
+│   └── foolish_portfolio/
+│       ├── config.json              # {"name": "Foolish Portfolio"}
+│       ├── transactions.csv
+│       └── data/
+│           └── ...
+├── app.py
+├── portfolio_engine.py
+├── requirements.txt
+├── templates/
+│   └── index.html
+└── tests/
+    ├── test_portfolio_engine.py
+    └── test_app.py
+```
+
+### Migration Steps
+1. Create `portfolios/tqqq_portfolio/` directory structure.
+2. Move `transactions.csv` → `portfolios/tqqq_portfolio/transactions.csv`.
+3. Move `data/*.csv` → `portfolios/tqqq_portfolio/data/`.
+4. Create `portfolios/tqqq_portfolio/config.json` with `{"name": "TQQQ Portfolio"}`.
+5. Create empty `portfolios/foolish_portfolio/` with config and empty transactions file.
+6. Remove root-level `transactions.csv` and `data/` directory.
+7. Update `.gitignore` to ignore `portfolios/*/data/*.csv` instead of `data/*.csv` (keep `.gitkeep`).
+
+### Test Plan
+- All existing engine and app tests continue to pass (test fixtures create temp portfolio folders).
+- New tests: portfolio listing/discovery, portfolio switching via query param, default portfolio selection, config.json reading.
+
+### Known Limitations / Deferred to Future Sprints
+- **Create/rename/delete from UI**: Portfolio management is done by editing files/folders for now.
+- **Portfolio-level settings**: All portfolios share the same shadow benchmarks (VOO, QQQ). Per-portfolio benchmark selection is deferred.
+
+---
+
+### Backlog Stories
+1. Zoom in and out on the performance chart.
+2. Show today v. the market.
+3. Put transaction data on a separate tab.
+4. Show performance of each individual transaction.
+5. Show "batting average"
+6. Host somewhere that is accessible from any internet connected device.
+7. Auto refresh at the end of the trading day.
+8. User defined performance "windows"
+9. Create, rename, and delete portfolios from the UI.
