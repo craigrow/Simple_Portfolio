@@ -18,6 +18,17 @@
 <body>
     <h1>Simple Portfolio Tracker</h1>
 
+    {% if portfolios %}
+    <form method="get" style="margin-bottom: 1.5rem;">
+        <label for="portfolio"><strong>Portfolio:</strong></label>
+        <select name="portfolio" id="portfolio" onchange="this.form.submit()" style="padding: 0.3rem; font-size: 1rem;">
+            {% for pid, pname in portfolios %}
+            <option value="{{ pid }}" {% if pid == portfolio_id %}selected{% endif %}>{{ pname }}</option>
+            {% endfor %}
+        </select>
+    </form>
+    {% endif %}
+
     <table>
         <thead>
             <tr><th style="text-align:left"></th><th>Total Invested</th><th>Current Value</th><th>Dividends</th><th>Difference</th></tr>

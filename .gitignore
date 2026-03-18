@@ -2,10 +2,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/portfolio.csv
-data/shadow_voo.csv
-data/shadow_qqq.csv
 flask.log
-data/dividends.csv
-data/splits.csv
-data/price_history.csv
+portfolios/*/data/*.csv
+!portfolios/*/data/.gitkeep

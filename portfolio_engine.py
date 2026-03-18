@@ -1,19 +1,47 @@
 import os
 import csv
+import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas as pd
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-TRANSACTIONS_FILE = os.path.join(os.path.dirname(__file__), "transactions.csv")
-PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.csv")
-SHADOW_VOO_FILE = os.path.join(DATA_DIR, "shadow_voo.csv")
-SHADOW_QQQ_FILE = os.path.join(DATA_DIR, "shadow_qqq.csv")
-SPLITS_FILE = os.path.join(DATA_DIR, "splits.csv")
-DIVIDENDS_FILE = os.path.join(DATA_DIR, "dividends.csv")
+BASE_DIR = os.path.dirname(__file__)
+PORTFOLIOS_DIR = os.path.join(BASE_DIR, "portfolios")
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
+
+
+def get_paths(portfolio_id):
+    """Return a dict of all file paths for a given portfolio."""
+    root = os.path.join(PORTFOLIOS_DIR, portfolio_id)
+    data = os.path.join(root, "data")
+    return {
+        "root": root,
+        "data_dir": data,
+        "transactions": os.path.join(root, "transactions.csv"),
+        "portfolio": os.path.join(data, "portfolio.csv"),
+        "shadow_voo": os.path.join(data, "shadow_voo.csv"),
+        "shadow_qqq": os.path.join(data, "shadow_qqq.csv"),
+        "splits": os.path.join(data, "splits.csv"),
+        "dividends": os.path.join(data, "dividends.csv"),
+        "price_history": os.path.join(data, "price_history.csv"),
+        "config": os.path.join(root, "config.json"),
+    }
+
+
+def list_portfolios():
+    """Return list of (portfolio_id, display_name) tuples, sorted alphabetically."""
+    if not os.path.isdir(PORTFOLIOS_DIR):
+        return []
+    result = []
+    for name in sorted(os.listdir(PORTFOLIOS_DIR)):
+        config_path = os.path.join(PORTFOLIOS_DIR, name, "config.json")
+        if os.path.isfile(config_path):
+            with open(config_path) as f:
+                cfg = json.load(f)
+            result.append((name, cfg.get("name", name)))
+    return result
 
 
 def _ensure_file(path):
@@ -49,7 +77,6 @@ def _build_shadow_row(date_str, shadow_ticker, total_value):
 
 def _append_rows(path, rows):
     _ensure_file(path)
-    # Ensure file ends with a newline before appending
     with open(path, "rb") as f:
         f.seek(0, 2)
         if f.tell() > 0:
@@ -63,21 +90,19 @@ def _append_rows(path, rows):
             writer.writerow(row)
 
 
-def get_new_transactions():
+def get_new_transactions(paths):
     """Return rows from transactions.csv not yet in portfolio.csv."""
-    txn = pd.read_csv(TRANSACTIONS_FILE)
-    portfolio = read_csv(PORTFOLIO_FILE)
-
+    txn = pd.read_csv(paths["transactions"])
+    portfolio = read_csv(paths["portfolio"])
     if portfolio.empty:
         return txn
-    # Compare by row count — new transactions are appended at the end
     processed_count = len(portfolio)
     return txn.iloc[processed_count:]
 
 
-def sync():
+def sync(paths):
     """Process new transactions and update portfolio + shadow files."""
-    new = get_new_transactions()
+    new = get_new_transactions(paths)
     if new.empty:
         return 0
 
@@ -102,19 +127,19 @@ def sync():
         if qqq_row:
             qqq_rows.append(qqq_row)
 
-    _append_rows(PORTFOLIO_FILE, portfolio_rows)
-    _append_rows(SHADOW_VOO_FILE, voo_rows)
-    _append_rows(SHADOW_QQQ_FILE, qqq_rows)
+    _append_rows(paths["portfolio"], portfolio_rows)
+    _append_rows(paths["shadow_voo"], voo_rows)
+    _append_rows(paths["shadow_qqq"], qqq_rows)
 
     return len(portfolio_rows)
 
 
-def load_all():
+def load_all(paths):
     """Return all three portfolios as DataFrames."""
     return (
-        read_csv(PORTFOLIO_FILE),
-        read_csv(SHADOW_VOO_FILE),
-        read_csv(SHADOW_QQQ_FILE),
+        read_csv(paths["portfolio"]),
+        read_csv(paths["shadow_voo"]),
+        read_csv(paths["shadow_qqq"]),
     )
 
 
@@ -124,23 +149,21 @@ def _last_market_close():
     now = datetime.now(et)
     close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)
 
-    # If it's before today's close, look at previous days
     if now < close_today:
         candidate = close_today - timedelta(days=1)
     else:
         candidate = close_today
 
-    # Walk back to a weekday (Mon-Fri)
-    while candidate.weekday() >= 5:  # 5=Sat, 6=Sun
+    while candidate.weekday() >= 5:
         candidate -= timedelta(days=1)
 
     return candidate
 
 
-def _get_all_tickers():
+def _get_all_tickers(paths):
     """Return set of all tickers across all three portfolios."""
     tickers = set()
-    for path in [PORTFOLIO_FILE, SHADOW_VOO_FILE, SHADOW_QQQ_FILE]:
+    for path in [paths["portfolio"], paths["shadow_voo"], paths["shadow_qqq"]]:
         df = read_csv(path)
         if not df.empty:
             tickers.update(df["TICKER"].unique())
@@ -148,7 +171,7 @@ def _get_all_tickers():
 
 
 def _fetch_splits(tickers):
-    """Fetch split history for a set of tickers. Returns list of [TICKER, DATE, RATIO] rows."""
+    """Fetch split history for a set of tickers."""
     rows = []
     for ticker in tickers:
         t = yf.Ticker(ticker)
@@ -160,24 +183,24 @@ def _fetch_splits(tickers):
     return rows
 
 
-def sync_splits():
-    """Refresh split data if stale (last modified before most recent market close)."""
+def sync_splits(paths):
+    """Refresh split data if stale."""
     last_close = _last_market_close()
 
-    if os.path.exists(SPLITS_FILE):
+    if os.path.exists(paths["splits"]):
         mtime = datetime.fromtimestamp(
-            os.path.getmtime(SPLITS_FILE), tz=ZoneInfo("America/New_York")
+            os.path.getmtime(paths["splits"]), tz=ZoneInfo("America/New_York")
         )
         if mtime >= last_close:
-            return False  # Still fresh
+            return False
 
-    tickers = _get_all_tickers()
+    tickers = _get_all_tickers(paths)
     if not tickers:
         return False
 
     rows = _fetch_splits(tickers)
-    os.makedirs(os.path.dirname(SPLITS_FILE), exist_ok=True)
-    with open(SPLITS_FILE, "w", newline="") as f:
+    os.makedirs(os.path.dirname(paths["splits"]), exist_ok=True)
+    with open(paths["splits"], "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["TICKER", "DATE", "RATIO"])
         for row in rows:
@@ -187,7 +210,7 @@ def sync_splits():
 
 
 def _fetch_dividends(tickers):
-    """Fetch dividend history for a set of tickers. Returns list of [TICKER, DATE, AMOUNT] rows."""
+    """Fetch dividend history for a set of tickers."""
     rows = []
     for ticker in tickers:
         t = yf.Ticker(ticker)
@@ -199,24 +222,24 @@ def _fetch_dividends(tickers):
     return rows
 
 
-def sync_dividends():
-    """Refresh dividend data if stale (last modified before most recent market close)."""
+def sync_dividends(paths):
+    """Refresh dividend data if stale."""
     last_close = _last_market_close()
 
-    if os.path.exists(DIVIDENDS_FILE):
+    if os.path.exists(paths["dividends"]):
         mtime = datetime.fromtimestamp(
-            os.path.getmtime(DIVIDENDS_FILE), tz=ZoneInfo("America/New_York")
+            os.path.getmtime(paths["dividends"]), tz=ZoneInfo("America/New_York")
         )
         if mtime >= last_close:
             return False
 
-    tickers = _get_all_tickers()
+    tickers = _get_all_tickers(paths)
     if not tickers:
         return False
 
     rows = _fetch_dividends(tickers)
-    os.makedirs(os.path.dirname(DIVIDENDS_FILE), exist_ok=True)
-    with open(DIVIDENDS_FILE, "w", newline="") as f:
+    os.makedirs(os.path.dirname(paths["dividends"]), exist_ok=True)
+    with open(paths["dividends"], "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["TICKER", "DATE", "AMOUNT"])
         for row in rows:
@@ -225,11 +248,11 @@ def sync_dividends():
     return True
 
 
-def _read_dividends():
+def _read_dividends(paths):
     """Read dividends.csv into a DataFrame."""
-    if not os.path.exists(DIVIDENDS_FILE):
+    if not os.path.exists(paths["dividends"]):
         return pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
-    return pd.read_csv(DIVIDENDS_FILE)
+    return pd.read_csv(paths["dividends"])
 
 
 def get_total_dividends(ticker, shares, purchase_date, splits_df, dividends_df):
@@ -241,7 +264,6 @@ def get_total_dividends(ticker, shares, purchase_date, splits_df, dividends_df):
     ticker_divs = ticker_divs[ticker_divs["DATE"].apply(lambda d: pd.to_datetime(d) > purchase_dt)]
     total = 0.0
     for _, div in ticker_divs.iterrows():
-        # Shares held at time of dividend = original shares adjusted for splits before dividend date
         div_dt = pd.to_datetime(div["DATE"])
         relevant_splits = splits_df[splits_df["DATE"].apply(lambda d: pd.to_datetime(d) <= div_dt)]
         adj_shares = get_adjusted_shares(ticker, shares, purchase_date, relevant_splits)
@@ -249,11 +271,11 @@ def get_total_dividends(ticker, shares, purchase_date, splits_df, dividends_df):
     return round(total, 2)
 
 
-def _read_splits():
+def _read_splits(paths):
     """Read splits.csv into a DataFrame."""
-    if not os.path.exists(SPLITS_FILE):
+    if not os.path.exists(paths["splits"]):
         return pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
-    return pd.read_csv(SPLITS_FILE)
+    return pd.read_csv(paths["splits"])
 
 
 def get_adjusted_shares(ticker, shares, purchase_date, splits_df):
@@ -268,38 +290,15 @@ def get_adjusted_shares(ticker, shares, purchase_date, splits_df):
     return round(shares, 5)
 
 
-def get_current_values(portfolio_df):
-    """Calculate total current value of a portfolio, adjusted for splits."""
-    if portfolio_df.empty:
-        return 0.0
-
-    splits_df = _read_splits()
-    tickers = portfolio_df["TICKER"].unique().tolist()
-
-    # Batch fetch current prices
-    current_prices = _fetch_current_prices(tickers)
-
-    total = 0.0
-    for _, row in portfolio_df.iterrows():
-        ticker = row["TICKER"]
-        shares = get_adjusted_shares(
-            ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df
-        )
-        price = current_prices.get(ticker, 0.0)
-        total += shares * price
-
-    return round(total, 2)
-
-
-def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_prices=None):
+def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_prices=None, paths=None):
     """Add CURRENT_SHARES, CURRENT_VALUE, and TOTAL_DIVIDENDS columns."""
     if portfolio_df.empty:
         return portfolio_df, 0.0, 0.0
 
     if splits_df is None:
-        splits_df = _read_splits()
+        splits_df = _read_splits(paths) if paths else pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
     if dividends_df is None:
-        dividends_df = _read_dividends()
+        dividends_df = _read_dividends(paths) if paths else pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
     if current_prices is None:
         tickers = portfolio_df["TICKER"].unique().tolist()
         current_prices = _fetch_current_prices(tickers)
@@ -324,7 +323,7 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
 
 
 def _fetch_current_prices(tickers):
-    """Fetch current prices for a list of tickers. Returns dict of ticker -> price."""
+    """Fetch current prices for a list of tickers."""
     if not tickers:
         return {}
     data = yf.download(tickers, period="1d", progress=False)
@@ -341,14 +340,8 @@ def _fetch_current_prices(tickers):
     return prices
 
 
-PRICE_HISTORY_FILE = os.path.join(DATA_DIR, "price_history.csv")
-
-
-def fetch_all_history(portfolios, splits_df, dividends_df):
-    """Fetch historical closing prices, using cache where possible.
-
-    Returns a DataFrame of closing prices indexed by date, with one column per ticker.
-    """
+def fetch_all_history(portfolios, splits_df, dividends_df, paths):
+    """Fetch historical closing prices, using cache where possible."""
     all_tickers = set()
     earliest = None
     for df in portfolios:
@@ -363,10 +356,9 @@ def fetch_all_history(portfolios, splits_df, dividends_df):
 
     needed = sorted(all_tickers)
 
-    # Load cache
     cached = None
-    if os.path.exists(PRICE_HISTORY_FILE):
-        cached = pd.read_csv(PRICE_HISTORY_FILE, index_col=0, parse_dates=True)
+    if os.path.exists(paths["price_history"]):
+        cached = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
 
     last_close = _last_market_close()
     new_tickers = []
@@ -375,7 +367,6 @@ def fetch_all_history(portfolios, splits_df, dividends_df):
         if cached is None or t not in cached.columns:
             new_tickers.append(t)
         else:
-            # If cached data for this ticker starts much later than earliest purchase, refetch
             first_valid = cached[t].first_valid_index()
             if first_valid is None or first_valid > earliest + pd.Timedelta(days=7):
                 new_tickers.append(t)
@@ -384,17 +375,14 @@ def fetch_all_history(portfolios, splits_df, dividends_df):
 
     frames = []
 
-    # Full fetch for new tickers (or tickers with incomplete cache)
     if new_tickers:
         data = yf.download(new_tickers, start=earliest.strftime("%Y-%m-%d"), progress=False)["Close"]
         if isinstance(data, pd.Series):
             data = data.to_frame(name=new_tickers[0])
         frames.append(data)
-        # Drop these columns from cache if they existed with bad data
         if cached is not None:
             cached = cached.drop(columns=[t for t in new_tickers if t in cached.columns], errors="ignore")
 
-    # Delta fetch for existing tickers if stale
     if existing_tickers and cached is not None:
         last_cached = cached.index.max()
         if last_cached.tzinfo is None:
@@ -406,7 +394,6 @@ def fetch_all_history(portfolios, splits_df, dividends_df):
                 delta_close = delta["Close"]
                 if isinstance(delta_close, pd.Series):
                     delta_close = delta_close.to_frame(name=existing_tickers[0])
-                # Append new rows to cached existing columns
                 existing_cached = cached[existing_tickers]
                 frames.append(pd.concat([existing_cached, delta_close]))
             else:
@@ -420,9 +407,8 @@ def fetch_all_history(portfolios, splits_df, dividends_df):
     result = pd.concat(frames, axis=1)
     result = result[~result.index.duplicated(keep="last")].sort_index()
 
-    # Save cache
-    os.makedirs(DATA_DIR, exist_ok=True)
-    result.to_csv(PRICE_HISTORY_FILE)
+    os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
+    result.to_csv(paths["price_history"])
 
     return result
 
@@ -443,15 +429,12 @@ def get_historical_values(portfolio_df, splits_df, dividends_df, prices_df):
         if ticker not in prices_df.columns:
             continue
 
-        # Get split-adjusted share count (same for all dates after last split)
         adj = get_adjusted_shares(ticker, shares, row["DATE"], splits_df)
 
-        # Price series for this ticker, zero before purchase
         price_series = prices_df[ticker].fillna(0.0)
         mask = dates >= purchase_dt
         totals += price_series * adj * mask
 
-        # Add cumulative dividends
         if not dividends_df.empty:
             ticker_divs = dividends_df[
                 (dividends_df["TICKER"] == ticker) &
