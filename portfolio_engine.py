@@ -326,7 +326,10 @@ def _fetch_current_prices(tickers):
     """Fetch current prices for a list of tickers."""
     if not tickers:
         return {}
-    data = yf.download(tickers, period="1d", progress=False)
+    end = pd.Timestamp.now(tz="America/New_York").normalize() + pd.Timedelta(days=1)
+    start = end - pd.Timedelta(days=5)  # 5 days back to cover weekends/holidays
+    data = yf.download(tickers, start=start.strftime("%Y-%m-%d"),
+                       end=end.strftime("%Y-%m-%d"), progress=False)
     prices = {}
     if len(tickers) == 1:
         if not data.empty:

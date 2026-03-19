@@ -356,3 +356,4 @@ The current logic is correct, readable, and maintainable. The O(rows × dividend
 11. Make all the tables sortable by clicking on headings.
 12. Make the heading "stick" when the table scrolls.
 13. Create a portfolio view (group tickers from the transactions)
+
