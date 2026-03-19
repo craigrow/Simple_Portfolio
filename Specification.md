@@ -306,6 +306,39 @@ Simple_Portfolio/
 - **Create/rename/delete from UI**: Portfolio management is done by editing files/folders for now.
 - **Portfolio-level settings**: All portfolios share the same shadow benchmarks (VOO, QQQ). Per-portfolio benchmark selection is deferred.
 
+### User Story #7
+As a user, I want to see my portfolio immediately when I put the URL in the browser, so that I don't have to wait to see my portfolios. It is understood that data may be cached. So, it is OK to show cached data on load and then refresh the data in the background provided you clearly communicate that I'm viewing cached data and refresh the page when it is available. You should also consider what data can be pre-fetched (before the user loads the page) efficiently. 
+
+### Status: Not Started
+
+### Analysis: Current Page Load Breakdown
+
+**On every page load (no API calls, pure computation):**
+- `enrich_portfolio()` × 3 — recalculates CURRENT_SHARES, CURRENT_VALUE, TOTAL_DIVIDENDS for every row using already-cached data (splits, dividends, prices from CSV files).
+- `get_historical_values()` × 3 — rebuilds daily value series for the chart from cached price history.
+- Template rendering.
+
+**Once per trading day (staleness-gated, triggers API calls):**
+- `sync_splits()` — re-fetches split history. Sequential, one `yf.Ticker()` call per unique ticker. ~30+ calls for the Foolish Portfolio. This is the primary bottleneck on the first load after market close.
+- `sync_dividends()` — same pattern, one ticker at a time.
+- `fetch_all_history()` — delta fetch of new price data. Already efficient (single batched `yf.download()`).
+
+**Only when new transactions are added (infrequent, ~weekly):**
+- `sync()` — processes new rows, 2 API calls per transaction (VOO + QQQ closing price). Negligible with one-at-a-time adds.
+
+### Proposed Architecture
+
+1. **Serve cached data immediately**: On page load, skip all staleness checks and API calls. Read existing CSV files, run enrichment (pure computation), and render. This should be near-instant.
+
+2. **Show "cached data" indicator**: Display a banner or subtle indicator when the data is stale (splits/dividends/prices last refreshed before most recent market close). Something like "Data as of [timestamp]. Refreshing…"
+
+3. **Background refresh via async endpoint**: After the page loads, JavaScript calls a `/refresh?portfolio=<id>` endpoint that triggers the staleness-gated sync (splits, dividends, price history delta). When complete, the frontend auto-reloads or updates the data and removes the stale indicator.
+
+4. **Pre-fetch consideration**: A background scheduled process (cron or in-app timer) could run the daily staleness refresh shortly after market close (4:00 PM ET), so data is already fresh before the user visits. This aligns with the "auto refresh at end of trading day" backlog item and could be implemented together.
+
+### Why not optimize the API call paths instead?
+The current logic is correct, readable, and maintainable. The O(rows × dividends × splits) enrichment complexity is fine at this scale (hundreds of transactions). The real UX problem is the blocking staleness refresh on page load, which is better solved by serving cached data first than by optimizing code that works correctly.
+
 ---
 
 ### Backlog Stories
@@ -318,3 +351,7 @@ Simple_Portfolio/
 7. Auto refresh at the end of the trading day.
 8. User defined performance "windows"
 9. Create, rename, and delete portfolios from the UI.
+10. Sort the transactions in date order.
+11. Make all the tables sortable by clicking on headings.
+12. Make the heading "stick" when the table scrolls.
+13. Create a portfolio view (group tickers from the transactions)
