@@ -80,8 +80,9 @@ Simple_Portfolio/
 ```bash
 pip install -r requirements.txt
 python app.py
-# Open http://127.0.0.1:5000
+# Open http://127.0.0.1:5001
 ```
+**Note:** macOS AirPlay Receiver occupies port 5000. The app runs on port 5001 to avoid this conflict. To change the port, edit the `app.run()` call in `app.py`.
 
 ### How to Test
 ```bash
