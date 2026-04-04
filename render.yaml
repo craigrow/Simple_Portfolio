@@ -4,7 +4,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt && python init_data.py
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
-    plan: free
+    plan: starter
     disk:
       name: portfolio-data
       mountPath: /data
