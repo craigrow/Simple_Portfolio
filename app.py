@@ -22,16 +22,17 @@ def index():
     paths = portfolio_engine.get_paths(portfolio_id)
     portfolio_name = next(n for pid, n in portfolios if pid == portfolio_id)
 
-    portfolio_engine.sync(paths)
-    portfolio_engine.sync_splits(paths)
-    portfolio_engine.sync_dividends(paths)
+    # Load cached data only — no API calls
     port_df, shadow_voo_df, shadow_qqq_df = portfolio_engine.load_all(paths)
     splits_df = portfolio_engine._read_splits(paths)
     dividends_df = portfolio_engine._read_dividends(paths)
 
-    prices_df = portfolio_engine.fetch_all_history(
-        [port_df, shadow_voo_df, shadow_qqq_df], splits_df, dividends_df, paths
-    )
+    prices_path = paths["price_history"]
+    import os
+    if os.path.exists(prices_path):
+        prices_df = pd.read_csv(prices_path, index_col=0, parse_dates=True)
+    else:
+        prices_df = pd.DataFrame()
 
     current_prices = {}
     if not prices_df.empty:
@@ -47,17 +48,8 @@ def index():
     shadow_qqq_df, qqq_value, qqq_divs = portfolio_engine.enrich_portfolio(
         shadow_qqq_df, splits_df, dividends_df, current_prices)
 
-    hist_main = portfolio_engine.get_historical_values(port_df, splits_df, dividends_df, prices_df)
-    hist_voo = portfolio_engine.get_historical_values(shadow_voo_df, splits_df, dividends_df, prices_df)
-    hist_qqq = portfolio_engine.get_historical_values(shadow_qqq_df, splits_df, dividends_df, prices_df)
-    voo_by_date = {r["DATE"]: r["VALUE"] for r in hist_voo}
-    qqq_by_date = {r["DATE"]: r["VALUE"] for r in hist_qqq}
-    history = [
-        {"DATE": r["DATE"], "MAIN": r["VALUE"],
-         "VOO": voo_by_date.get(r["DATE"], 0.0),
-         "QQQ": qqq_by_date.get(r["DATE"], 0.0)}
-        for r in hist_main
-    ]
+    # Chart disabled until historical calculation is optimized
+    history = []
     columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS"]
     return render_template(
         "index.html",

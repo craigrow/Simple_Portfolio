@@ -259,15 +259,19 @@ def get_total_dividends(ticker, shares, purchase_date, splits_df, dividends_df):
     """Calculate total dividends received for a holding since purchase date."""
     if dividends_df.empty:
         return 0.0
-    purchase_dt = pd.to_datetime(purchase_date)
-    ticker_divs = dividends_df[dividends_df["TICKER"] == ticker].copy()
-    ticker_divs = ticker_divs[ticker_divs["DATE"].apply(lambda d: pd.to_datetime(d) > purchase_dt)]
+    if not isinstance(purchase_date, pd.Timestamp):
+        purchase_date = pd.to_datetime(purchase_date)
+    td = dividends_df[dividends_df["TICKER"] == ticker]
+    if td.empty:
+        return 0.0
+    div_dates = td["_date"] if "_date" in td.columns else td["DATE"].apply(pd.to_datetime)
+    td = td[div_dates > purchase_date]
+    if td.empty:
+        return 0.0
+    # For each dividend, get split-adjusted shares at that point
     total = 0.0
-    for _, div in ticker_divs.iterrows():
-        div_dt = pd.to_datetime(div["DATE"])
-        relevant_splits = splits_df[splits_df["DATE"].apply(lambda d: pd.to_datetime(d) <= div_dt)]
-        adj_shares = get_adjusted_shares(ticker, shares, purchase_date, relevant_splits)
-        total += adj_shares * div["AMOUNT"]
+    adj = get_adjusted_shares(ticker, shares, purchase_date, splits_df)
+    total = (adj * td["AMOUNT"]).sum()
     return round(total, 2)
 
 
@@ -282,12 +286,14 @@ def get_adjusted_shares(ticker, shares, purchase_date, splits_df):
     """Apply all splits for ticker that occurred after purchase_date."""
     if splits_df.empty:
         return shares
-    purchase_dt = pd.to_datetime(purchase_date)
-    ticker_splits = splits_df[splits_df["TICKER"] == ticker]
-    for _, split in ticker_splits.iterrows():
-        if pd.to_datetime(split["DATE"]) > purchase_dt:
-            shares *= split["RATIO"]
-    return round(shares, 5)
+    if not isinstance(purchase_date, pd.Timestamp):
+        purchase_date = pd.to_datetime(purchase_date)
+    ts = splits_df[splits_df["TICKER"] == ticker]
+    if ts.empty:
+        return shares
+    mask = ts["_date"] > purchase_date if "_date" in ts.columns else ts["DATE"].apply(pd.to_datetime) > purchase_date
+    ratio = ts.loc[mask, "RATIO"].prod()
+    return round(shares * ratio, 5) if ratio != 0 else shares
 
 
 def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_prices=None, paths=None):
@@ -306,6 +312,15 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
     current_shares = []
     current_values = []
     total_dividends = []
+
+    # Pre-parse dates once to avoid repeated pd.to_datetime in loops
+    if not splits_df.empty and "_date" not in splits_df.columns:
+        splits_df = splits_df.copy()
+        splits_df["_date"] = pd.to_datetime(splits_df["DATE"])
+    if not dividends_df.empty and "_date" not in dividends_df.columns:
+        dividends_df = dividends_df.copy()
+        dividends_df["_date"] = pd.to_datetime(dividends_df["DATE"])
+
     for _, row in portfolio_df.iterrows():
         ticker = row["TICKER"]
         adj = get_adjusted_shares(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df)
