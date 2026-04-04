@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
+import os
 import pandas as pd
 import portfolio_engine
 
@@ -28,7 +29,6 @@ def index():
     dividends_df = portfolio_engine._read_dividends(paths)
 
     prices_path = paths["price_history"]
-    import os
     if os.path.exists(prices_path):
         prices_df = pd.read_csv(prices_path, index_col=0, parse_dates=True)
     else:
@@ -70,7 +70,23 @@ def index():
         voo_invested=shadow_voo_df["TOTAL_VALUE"].sum() if not shadow_voo_df.empty else 0.0,
         qqq_invested=shadow_qqq_df["TOTAL_VALUE"].sum() if not shadow_qqq_df.empty else 0.0,
         history=history,
+        last_updated=portfolio_engine.get_last_updated(paths),
+        needs_refresh=portfolio_engine.needs_refresh(paths),
     )
+
+
+@app.route("/refresh")
+def refresh():
+    """Trigger data refresh — called by the Refresh button."""
+    portfolio_id = request.args.get("portfolio")
+    portfolios = portfolio_engine.list_portfolios()
+    if not portfolios:
+        return jsonify({"status": "ok", "message": "No portfolios"})
+    if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
+        portfolio_id = portfolios[0][0]
+    paths = portfolio_engine.get_paths(portfolio_id)
+    result = portfolio_engine.refresh_data(paths)
+    return jsonify(result)
 
 
 if __name__ == "__main__":

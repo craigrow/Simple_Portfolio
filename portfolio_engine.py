@@ -26,6 +26,7 @@ def get_paths(portfolio_id):
         "splits": os.path.join(data, "splits.csv"),
         "dividends": os.path.join(data, "dividends.csv"),
         "price_history": os.path.join(data, "price_history.csv"),
+        "last_updated": os.path.join(data, "last_updated.txt"),
         "config": os.path.join(root, "config.json"),
     }
 
@@ -466,3 +467,109 @@ def get_historical_values(portfolio_df, splits_df, dividends_df, prices_df):
 
     return [{"DATE": d.strftime("%Y-%m-%d"), "VALUE": round(v, 2)}
             for d, v in totals.items()]
+
+
+def get_last_updated(paths):
+    """Read the last_updated timestamp. Returns string or None."""
+    if os.path.exists(paths["last_updated"]):
+        with open(paths["last_updated"]) as f:
+            return f.read().strip()
+    return None
+
+
+def needs_refresh(paths):
+    """Return True if cached data is older than the most recent market close."""
+    if not os.path.exists(paths["last_updated"]):
+        return True
+    mtime = datetime.fromtimestamp(
+        os.path.getmtime(paths["last_updated"]), tz=ZoneInfo("America/New_York"))
+    return mtime < _last_market_close()
+
+
+def _set_last_updated(paths):
+    """Write current timestamp to last_updated file."""
+    os.makedirs(os.path.dirname(paths["last_updated"]), exist_ok=True)
+    ts = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %I:%M %p ET")
+    with open(paths["last_updated"], "w") as f:
+        f.write(ts)
+    return ts
+
+
+def update_prices(paths, max_retries=3):
+    """Fetch prices for all tickers with retries, update cache, record timestamp.
+    Returns dict with status and any failed tickers."""
+    import time
+
+    all_tickers = sorted(_get_all_tickers(paths))
+    if not all_tickers:
+        return {"status": "ok", "last_updated": _set_last_updated(paths)}
+
+    # Load existing cache
+    if os.path.exists(paths["price_history"]):
+        cached = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    else:
+        cached = pd.DataFrame()
+
+    # Determine start date for fetch
+    port_df = read_csv(paths["portfolio"])
+    earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
+    if cached is not None and not cached.empty:
+        start = (cached.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    elif earliest is not None:
+        start = earliest.strftime("%Y-%m-%d")
+    else:
+        return {"status": "ok", "last_updated": _set_last_updated(paths)}
+
+    # Fetch with retries for missing tickers
+    remaining = list(all_tickers)
+    new_frames = []
+
+    for attempt in range(max_retries):
+        if not remaining:
+            break
+        try:
+            data = yf.download(remaining, start=start, progress=False)
+            if data.empty:
+                break
+            close = data["Close"]
+            if isinstance(close, pd.Series):
+                close = close.to_frame(name=remaining[0])
+            new_frames.append(close)
+            # Check which tickers got data
+            got = [t for t in remaining if t in close.columns and close[t].notna().any()]
+            remaining = [t for t in remaining if t not in got]
+        except Exception:
+            pass
+        if remaining and attempt < max_retries - 1:
+            time.sleep(3)
+
+    # Merge new data into cache
+    if new_frames:
+        new_data = pd.concat(new_frames, axis=1)
+        if not new_data.empty:
+            if not cached.empty:
+                combined = pd.concat([cached, new_data])
+                combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+            else:
+                combined = new_data.sort_index()
+            os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
+            combined.to_csv(paths["price_history"])
+
+    ts = _set_last_updated(paths)
+
+    if remaining:
+        return {"status": "incomplete", "last_updated": ts, "failed_tickers": remaining}
+    return {"status": "ok", "last_updated": ts}
+
+
+def refresh_data(paths):
+    """Full refresh: sync splits, dividends, and update prices."""
+    try:
+        sync_splits(paths)
+    except Exception:
+        pass
+    try:
+        sync_dividends(paths)
+    except Exception:
+        pass
+    return update_prices(paths)
