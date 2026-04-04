@@ -145,19 +145,20 @@ def load_all(paths):
 
 
 def _last_market_close():
-    """Return the datetime of the most recent 4 PM ET market close."""
+    """Return the date of the most recent market close, using yfinance data.
+    Accounts for weekends and holidays automatically."""
+    data = yf.download("VOO", period="5d", progress=False)
+    if not data.empty:
+        last_date = data.index[-1]
+        if hasattr(last_date, 'date'):
+            return last_date.date()
+        return pd.Timestamp(last_date).date()
+    # Fallback: skip weekends only
     et = ZoneInfo("America/New_York")
     now = datetime.now(et)
-    close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)
-
-    if now < close_today:
-        candidate = close_today - timedelta(days=1)
-    else:
-        candidate = close_today
-
+    candidate = now.date() if now.hour >= 16 else (now - timedelta(days=1)).date()
     while candidate.weekday() >= 5:
         candidate -= timedelta(days=1)
-
     return candidate
 
 
@@ -192,7 +193,7 @@ def sync_splits(paths):
         mtime = datetime.fromtimestamp(
             os.path.getmtime(paths["splits"]), tz=ZoneInfo("America/New_York")
         )
-        if mtime >= last_close:
+        if mtime.date() >= last_close:
             return False
 
     tickers = _get_all_tickers(paths)
@@ -231,7 +232,7 @@ def sync_dividends(paths):
         mtime = datetime.fromtimestamp(
             os.path.getmtime(paths["dividends"]), tz=ZoneInfo("America/New_York")
         )
-        if mtime >= last_close:
+        if mtime.date() >= last_close:
             return False
 
     tickers = _get_all_tickers(paths)
@@ -406,7 +407,7 @@ def fetch_all_history(portfolios, splits_df, dividends_df, paths):
         last_cached = cached.index.max()
         if last_cached.tzinfo is None:
             last_cached = last_cached.tz_localize("America/New_York")
-        if last_cached < last_close:
+        if last_cached.date() < last_close:
             start = (last_cached + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
             delta = yf.download(existing_tickers, start=start, progress=False)
             if not delta.empty:
@@ -470,29 +471,37 @@ def get_historical_values(portfolio_df, splits_df, dividends_df, prices_df):
 
 
 def get_last_updated(paths):
-    """Read the last_updated timestamp. Returns string or None."""
+    """Read the last_updated date and return a display string."""
     if os.path.exists(paths["last_updated"]):
         with open(paths["last_updated"]) as f:
-            return f.read().strip()
+            raw = f.read().strip()
+        try:
+            dt = pd.to_datetime(raw)
+            return dt.strftime("%B %-d, %Y") + " 4:00 PM ET"
+        except Exception:
+            return raw
     return None
 
 
 def needs_refresh(paths):
-    """Return True if cached data is older than the most recent market close."""
+    """Return True if cached data doesn't cover the most recent market close."""
     if not os.path.exists(paths["last_updated"]):
         return True
-    mtime = datetime.fromtimestamp(
-        os.path.getmtime(paths["last_updated"]), tz=ZoneInfo("America/New_York"))
-    return mtime < _last_market_close()
+    try:
+        with open(paths["last_updated"]) as f:
+            raw = f.read().strip()
+        updated_date = pd.to_datetime(raw).date()
+        return updated_date < _last_market_close()
+    except Exception:
+        return True
 
 
-def _set_last_updated(paths):
-    """Write current timestamp to last_updated file."""
+def _set_last_updated(paths, close_date):
+    """Write market close date to last_updated file (ISO format)."""
     os.makedirs(os.path.dirname(paths["last_updated"]), exist_ok=True)
-    ts = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %I:%M %p ET")
     with open(paths["last_updated"], "w") as f:
-        f.write(ts)
-    return ts
+        f.write(str(close_date))
+    return str(close_date)
 
 
 def update_prices(paths, max_retries=3):
@@ -502,7 +511,10 @@ def update_prices(paths, max_retries=3):
 
     all_tickers = sorted(_get_all_tickers(paths))
     if not all_tickers:
-        return {"status": "ok", "last_updated": _set_last_updated(paths)}
+        close_date = _last_market_close()
+        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
+
+    close_date = _last_market_close()
 
     # Load existing cache
     if os.path.exists(paths["price_history"]):
@@ -518,7 +530,7 @@ def update_prices(paths, max_retries=3):
     elif earliest is not None:
         start = earliest.strftime("%Y-%m-%d")
     else:
-        return {"status": "ok", "last_updated": _set_last_updated(paths)}
+        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
 
     # Fetch with retries for missing tickers
     remaining = list(all_tickers)
@@ -535,8 +547,10 @@ def update_prices(paths, max_retries=3):
             if isinstance(close, pd.Series):
                 close = close.to_frame(name=remaining[0])
             new_frames.append(close)
-            # Check which tickers got data
-            got = [t for t in remaining if t in close.columns and close[t].notna().any()]
+            # Check which tickers got data for the close_date
+            got = [t for t in remaining if t in close.columns
+                   and close[t].last_valid_index() is not None
+                   and close[t].last_valid_index().date() >= close_date]
             remaining = [t for t in remaining if t not in got]
         except Exception:
             pass
@@ -555,10 +569,10 @@ def update_prices(paths, max_retries=3):
             os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
             combined.to_csv(paths["price_history"])
 
-    ts = _set_last_updated(paths)
-
     if remaining:
-        return {"status": "incomplete", "last_updated": ts, "failed_tickers": remaining}
+        return {"status": "incomplete", "failed_tickers": remaining}
+
+    ts = _set_last_updated(paths, close_date)
     return {"status": "ok", "last_updated": ts}
 
 
