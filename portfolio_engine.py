@@ -7,7 +7,7 @@ import yfinance as yf
 import pandas as pd
 
 BASE_DIR = os.path.dirname(__file__)
-PORTFOLIOS_DIR = os.path.join(BASE_DIR, "portfolios")
+PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfolios"))
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
 
