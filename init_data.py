@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-"""Copy local portfolio data to the persistent disk if it's empty.
-Run once on first deploy: python init_data.py"""
+"""Copy local portfolio data to the persistent disk if empty, then
+ensure derived CSVs (portfolio, shadows, prices) are generated."""
 import os
 import shutil
 
@@ -8,8 +8,21 @@ SRC = os.path.join(os.path.dirname(__file__), "portfolios")
 DST = os.environ.get("PORTFOLIOS_DIR", "/data/portfolios")
 
 if os.path.exists(DST) and os.listdir(DST):
-    print(f"{DST} already has data, skipping.")
+    print(f"{DST} already has data, skipping copy.")
 else:
     print(f"Copying {SRC} → {DST}")
     shutil.copytree(SRC, DST, dirs_exist_ok=True)
-    print("Done.")
+    print("Done copying.")
+
+# Ensure derived CSVs exist (portfolio.csv, shadows, prices)
+os.environ["PORTFOLIOS_DIR"] = DST
+import portfolio_engine
+
+for pid, name in portfolio_engine.list_portfolios():
+    paths = portfolio_engine.get_paths(pid)
+    synced = portfolio_engine.sync(paths)
+    print(f"{name}: synced {synced} transactions")
+    if not os.path.exists(paths["price_history"]) or os.path.getsize(paths["price_history"]) == 0:
+        print(f"{name}: fetching initial price data...")
+        portfolio_engine.refresh_data(paths)
+        print(f"{name}: refresh complete")
