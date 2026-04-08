@@ -7,12 +7,17 @@ import shutil
 SRC = os.path.join(os.path.dirname(__file__), "portfolios")
 DST = os.environ.get("PORTFOLIOS_DIR", "/data/portfolios")
 
-if os.path.exists(DST) and os.listdir(DST):
-    print(f"{DST} already has data, skipping copy.")
-else:
+if not (os.path.exists(DST) and os.listdir(DST)):
     print(f"Copying {SRC} → {DST}")
     shutil.copytree(SRC, DST, dirs_exist_ok=True)
     print("Done copying.")
+else:
+    # Always sync transactions.csv from repo so new purchases appear on deploy
+    import glob
+    for txn in glob.glob(os.path.join(SRC, "*/transactions.csv")):
+        dst_txn = os.path.join(DST, os.path.relpath(txn, SRC))
+        shutil.copy2(txn, dst_txn)
+        print(f"Updated {dst_txn}")
 
 # Ensure derived CSVs exist (portfolio.csv, shadows, prices)
 os.environ["PORTFOLIOS_DIR"] = DST
