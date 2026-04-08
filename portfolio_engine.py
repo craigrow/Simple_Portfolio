@@ -577,7 +577,8 @@ def update_prices(paths, max_retries=3):
 
 
 def refresh_data(paths):
-    """Full refresh: sync splits, dividends, and update prices."""
+    """Full refresh: sync new transactions, splits, dividends, and update prices."""
+    sync(paths)
     try:
         sync_splits(paths)
     except Exception:

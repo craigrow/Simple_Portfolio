@@ -10,5 +10,7 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
+      - key: PORT
+        value: "10000"
       - key: PORTFOLIOS_DIR
         value: /data/portfolios
