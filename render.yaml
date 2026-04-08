@@ -3,7 +3,7 @@ services:
     name: simple-portfolio
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python init_data.py && gunicorn app:app --bind 0.0.0.0:$PORT
+    startCommand: python init_data.py && gunicorn app:app --bind 0.0.0.0:10000
     plan: starter
     disk:
       name: portfolio-data
