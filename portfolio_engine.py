@@ -519,6 +519,7 @@ def update_prices(paths, max_retries=3):
     # Load existing cache
     if os.path.exists(paths["price_history"]):
         cached = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+        cached = cached[~cached.index.duplicated(keep="last")]
     else:
         cached = pd.DataFrame()
 
