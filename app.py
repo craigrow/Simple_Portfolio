@@ -79,15 +79,18 @@ def index():
 @app.route("/refresh")
 def refresh():
     """Trigger data refresh — called by the Refresh button."""
-    portfolio_id = request.args.get("portfolio")
-    portfolios = portfolio_engine.list_portfolios()
-    if not portfolios:
-        return jsonify({"status": "ok", "message": "No portfolios"})
-    if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
-        portfolio_id = portfolios[0][0]
-    paths = portfolio_engine.get_paths(portfolio_id)
-    result = portfolio_engine.refresh_data(paths)
-    return jsonify(result)
+    try:
+        portfolio_id = request.args.get("portfolio")
+        portfolios = portfolio_engine.list_portfolios()
+        if not portfolios:
+            return jsonify({"status": "ok", "message": "No portfolios"})
+        if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
+            portfolio_id = portfolios[0][0]
+        paths = portfolio_engine.get_paths(portfolio_id)
+        result = portfolio_engine.refresh_data(paths)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 
 if __name__ == "__main__":

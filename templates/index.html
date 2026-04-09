@@ -132,6 +132,9 @@
                 } else if (data.status === "incomplete") {
                     status.textContent = "Updated, but failed: " + (data.failed_tickers || []).join(", ");
                     btn.disabled = false;
+                } else if (data.status === "error") {
+                    status.textContent = "Error: " + data.message;
+                    btn.disabled = false;
                 }
             })
             .catch(function(e) {
