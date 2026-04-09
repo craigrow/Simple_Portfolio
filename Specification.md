@@ -340,7 +340,7 @@ As a user, I want to see my portfolio immediately when I put the URL in the brow
 ### Why not optimize the API call paths instead?
 The current logic is correct, readable, and maintainable. The O(rows × dividends × splits) enrichment complexity is fine at this scale (hundreds of transactions). The real UX problem is the blocking staleness refresh on page load, which is better solved by serving cached data first than by optimizing code that works correctly.
 
-### User Story #7
+### User Story #8
 As a user, I want to see a portfolio view. The portfolio view is a table with the following columns: Ticker (one line for each security in the portfolio), Shared Owned (sum of shares from all purchases and sales), Cost Basis (Total inveted in the security minus sales), Current Value (Shares * Price), Dividends (sum of all dividends received from the security). Gain/Loss (Current Value - Cost Basis). 
 
     1. The table should be sortable by clicking on any column heading. 
