@@ -339,6 +339,24 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
     return enriched, round(sum(current_values), 2), round(sum(total_dividends), 2)
 
 
+def portfolio_summary(enriched_df):
+    """Aggregate per-transaction data into per-ticker summary for portfolio view."""
+    if enriched_df.empty:
+        return []
+    g = enriched_df.groupby("TICKER").agg(
+        SHARES_OWNED=("CURRENT_SHARES", "sum"),
+        COST_BASIS=("TOTAL_VALUE", "sum"),
+        CURRENT_VALUE=("CURRENT_VALUE", "sum"),
+        DIVIDENDS=("TOTAL_DIVIDENDS", "sum"),
+    ).reset_index()
+    g["GAIN_LOSS"] = g["CURRENT_VALUE"] - g["COST_BASIS"]
+    g = g.sort_values("CURRENT_VALUE", ascending=False).reset_index(drop=True)
+    # Round
+    for col in ["SHARES_OWNED", "COST_BASIS", "CURRENT_VALUE", "DIVIDENDS", "GAIN_LOSS"]:
+        g[col] = g[col].round(2)
+    return g.to_dict("records")
+
+
 def _fetch_current_prices(tickers):
     """Fetch current prices for a list of tickers."""
     if not tickers:
@@ -528,6 +546,8 @@ def update_prices(paths, max_retries=3):
     earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
     if cached is not None and not cached.empty:
         start = (cached.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if cached.index.max().date() >= close_date:
+            return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
     elif earliest is not None:
         start = earliest.strftime("%Y-%m-%d")
     else:

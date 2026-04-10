@@ -14,6 +14,11 @@
         .empty { color: #888; font-style: italic; }
         .data-bar { background: #f0f4f8; border: 1px solid #d0d7de; padding: 0.5rem 1rem; margin-bottom: 1rem; border-radius: 4px; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
         .data-bar button { padding: 0.3rem 0.8rem; cursor: pointer; }
+        .pv-top50 { background: #e8e8e8; }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { background: #dde; }
+        th.sort-asc::after { content: " ▲"; }
+        th.sort-desc::after { content: " ▼"; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -50,6 +55,85 @@
             <tr><td style="text-align:left">Shadow — QQQ (NASDAQ)</td><td>${{ "{:,.2f}".format(qqq_invested) }}</td><td>${{ "{:,.2f}".format(qqq_value) }}</td><td>${{ "{:,.2f}".format(qqq_divs) }}</td><td>${{ "{:,.2f}".format(main_total - (qqq_value + qqq_divs)) }}</td></tr>
         </tbody>
     </table>
+
+    {% if portfolio_summary %}
+    <h2>Portfolio View</h2>
+    <table id="pv-table">
+        <thead>
+            <tr>
+                <th class="sortable" data-col="TICKER" data-type="str">Ticker</th>
+                <th class="sortable" data-col="SHARES_OWNED" data-type="num">Shares Owned</th>
+                <th class="sortable" data-col="COST_BASIS" data-type="num">Cost Basis</th>
+                <th class="sortable" data-col="CURRENT_VALUE" data-type="num">Current Value</th>
+                <th class="sortable" data-col="DIVIDENDS" data-type="num">Dividends</th>
+                <th class="sortable" data-col="GAIN_LOSS" data-type="num">Gain/Loss</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <script>
+    (function() {
+        var data = {{ portfolio_summary|tojson }};
+        var table = document.getElementById("pv-table");
+        var tbody = table.querySelector("tbody");
+        var headers = table.querySelectorAll("th.sortable");
+        var currentSort = {col: null, dir: null};
+
+        function render() {
+            tbody.innerHTML = "";
+            var total = data.reduce(function(s, r) { return s + r.CURRENT_VALUE; }, 0);
+            var cumul = 0;
+            var byValue = data.slice().sort(function(a, b) { return b.CURRENT_VALUE - a.CURRENT_VALUE; });
+            var top50 = {};
+            for (var i = 0; i < byValue.length; i++) {
+                cumul += byValue[i].CURRENT_VALUE;
+                top50[byValue[i].TICKER] = true;
+                if (cumul >= total * 0.5) break;
+            }
+            var showShade = (currentSort.col === "CURRENT_VALUE");
+            for (var j = 0; j < data.length; j++) {
+                var r = data[j];
+                var tr = document.createElement("tr");
+                if (showShade && top50[r.TICKER]) tr.className = "pv-top50";
+                tr.innerHTML = "<td style='text-align:left'>" + r.TICKER + "</td>"
+                    + "<td>" + r.SHARES_OWNED.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
+                    + "<td>$" + r.COST_BASIS.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
+                    + "<td>$" + r.CURRENT_VALUE.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
+                    + "<td>$" + r.DIVIDENDS.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
+                    + "<td style='color:" + (r.GAIN_LOSS >= 0 ? "green" : "red") + "'>$" + r.GAIN_LOSS.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>";
+                tbody.appendChild(tr);
+            }
+        }
+
+        function sortBy(col, type, forceDir) {
+            var dir;
+            if (forceDir) {
+                dir = forceDir;
+            } else if (currentSort.col === col && currentSort.dir === "desc") {
+                dir = "asc";
+            } else {
+                dir = "desc";
+            }
+            currentSort = {col: col, dir: dir};
+            data.sort(function(a, b) {
+                var va = a[col], vb = b[col];
+                if (type === "str") { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+                if (dir === "asc") return va < vb ? -1 : va > vb ? 1 : 0;
+                return va > vb ? -1 : va < vb ? 1 : 0;
+            });
+            headers.forEach(function(h) { h.classList.remove("sort-asc", "sort-desc"); });
+            document.querySelector('[data-col="' + col + '"]').classList.add("sort-" + dir);
+            render();
+        }
+
+        headers.forEach(function(h) {
+            h.addEventListener("click", function() { sortBy(h.dataset.col, h.dataset.type); });
+        });
+
+        sortBy("CURRENT_VALUE", "num", "desc");
+    })();
+    </script>
+    {% endif %}
 
     {% if history %}
     <canvas id="historyChart" style="max-height:400px; margin-bottom:2rem;"></canvas>

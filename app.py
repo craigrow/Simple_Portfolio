@@ -52,12 +52,14 @@ def index():
     # Chart disabled until historical calculation is optimized
     history = []
     columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS"]
+    portfolio_summary = portfolio_engine.portfolio_summary(port_df)
     return render_template(
         "index.html",
         portfolios=portfolios,
         portfolio_id=portfolio_id,
         portfolio_name=portfolio_name,
         portfolio=port_df.to_dict("records") if not port_df.empty else [],
+        portfolio_summary=portfolio_summary,
         shadow_voo=shadow_voo_df.to_dict("records") if not shadow_voo_df.empty else [],
         shadow_qqq=shadow_qqq_df.to_dict("records") if not shadow_qqq_df.empty else [],
         columns=columns,
