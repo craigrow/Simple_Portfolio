@@ -33,19 +33,20 @@ feature/xxx  →  staging  →  main
 
 ### Rules
 
-1. **Never commit directly to `main` or `staging`.**
-2. Create feature branches from `staging`:
+1. **All development happens in feature branches off `staging`.** No direct commits to `staging` or `main`.
+2. **Nothing merges to `main` unless all tests pass AND UAT passes on staging.** No exceptions.
+3. Create feature branches from `staging`:
    ```bash
    git checkout staging && git pull
    git checkout -b feature/my-feature
    ```
-3. All tests must pass before merging:
+4. All tests must pass before merging to `staging`:
    ```bash
    python -m pytest tests/ -v
    ```
-4. Merge feature → `staging` (triggers staging deploy).
-5. UAT on staging URL.
-6. Merge `staging` → `main` (triggers production deploy).
+5. Merge feature → `staging` (triggers staging deploy).
+6. UAT on staging URL. Verify the feature works end-to-end.
+7. Only after UAT passes: merge `staging` → `main` (triggers production deploy).
 
 ## Running Tests
 
