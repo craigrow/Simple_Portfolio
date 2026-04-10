@@ -4,6 +4,7 @@ import csv
 import json
 import pytest
 from unittest.mock import patch
+import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import portfolio_engine
@@ -33,6 +34,7 @@ def setup_teardown(tmp_path):
         "dividends": str(data_dir / "dividends.csv"),
         "price_history": str(data_dir / "price_history.csv"),
         "config": str(test_portfolio / "config.json"),
+        "last_updated": str(data_dir / "last_updated.txt"),
     }
 
     with open(portfolio_engine._test_paths["transactions"], "w", newline="") as f:
@@ -133,3 +135,108 @@ class TestIndexRoute:
         resp = client.get("/?portfolio=nonexistent")
         assert resp.status_code == 200
         assert b"Test Portfolio" in resp.data
+
+
+class TestRefreshRoute:
+    def test_returns_json_ok(self, client):
+        """Refresh with no data returns JSON ok."""
+        resp = client.get("/refresh?portfolio=test_portfolio")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+
+    def test_returns_json_on_error(self, client):
+        """Engine exception returns JSON error, not HTML."""
+        with patch.object(portfolio_engine, "refresh_data", side_effect=RuntimeError("boom")):
+            resp = client.get("/refresh?portfolio=test_portfolio")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["status"] == "error"
+            assert "boom" in data["message"]
+
+    def test_defaults_to_first_portfolio(self, client):
+        resp = client.get("/refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "ok"
+
+    def test_invalid_portfolio_defaults(self, client):
+        resp = client.get("/refresh?portfolio=nonexistent")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "ok"
+
+
+class TestPortfolioViewRendering:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_portfolio_view_heading(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        # Write price history so portfolio_summary has data
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"Portfolio View" in resp.data
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_portfolio_view_columns(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b'data-col="TICKER"' in resp.data
+        assert b'data-col="SHARES_OWNED"' in resp.data
+        assert b'data-col="COST_BASIS"' in resp.data
+        assert b'data-col="CURRENT_VALUE"' in resp.data
+        assert b'data-col="DIVIDENDS"' in resp.data
+        assert b'data-col="GAIN_LOSS"' in resp.data
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_portfolio_view_sortable_headers(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert resp.data.count(b'class="sortable"') == 6
+
+    def test_no_portfolio_view_when_empty(self, client):
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"Portfolio View" not in resp.data
+
+
+class TestStaleDataBanner:
+    def test_shows_refresh_button_when_stale(self, client):
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"Refresh" in resp.data
+
+    def test_shows_freshness_message(self, client):
+        from datetime import date
+        portfolio_engine._set_last_updated(_paths(), date(2025, 6, 15))
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"Prices as of" in resp.data
+
+
+class TestCurrentPriceLookup:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_nan_in_last_row_uses_last_valid(self, mock_price, client):
+        """OTC tickers with NaN in latest row should still get a price."""
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "PRYMY", 50.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=2)
+        prices = pd.DataFrame({
+            "PRYMY": [67.0, float("nan")],
+            "VOO": [500.0, 510.0],
+            "QQQ": [400.0, 410.0],
+        }, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        resp = client.get("/?portfolio=test_portfolio")
+        # Portfolio View should show PRYMY with non-zero current value ($670)
+        assert b"Portfolio View" in resp.data
+        assert b"$670.00" in resp.data

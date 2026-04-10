@@ -36,6 +36,7 @@ def setup_teardown(tmp_path):
         "dividends": str(data_dir / "dividends.csv"),
         "price_history": str(data_dir / "price_history.csv"),
         "config": str(test_portfolio / "config.json"),
+        "last_updated": str(data_dir / "last_updated.txt"),
     }
 
     with open(portfolio_engine._test_paths["transactions"], "w", newline="") as f:
@@ -231,10 +232,10 @@ class TestLastMarketClose:
         close = portfolio_engine._last_market_close()
         assert close.weekday() < 5
 
-    def test_returns_4pm_et(self):
+    def test_returns_date_not_datetime(self):
         close = portfolio_engine._last_market_close()
-        assert close.hour == 16
-        assert close.minute == 0
+        from datetime import date
+        assert isinstance(close, date)
 
 
 class TestGetAdjustedShares:
@@ -407,3 +408,137 @@ class TestEnrichWithDividends:
         enriched, value, divs = portfolio_engine.enrich_portfolio(portfolio, paths=_paths())
         assert enriched.iloc[0]["TOTAL_DIVIDENDS"] == 7.5
         assert divs == 7.5
+
+
+class TestPortfolioSummary:
+    def test_empty_dataframe(self):
+        result = portfolio_engine.portfolio_summary(pd.DataFrame())
+        assert result == []
+
+    def test_groups_by_ticker(self):
+        df = pd.DataFrame({
+            "TICKER": ["AAPL", "AAPL", "MSFT"],
+            "CURRENT_SHARES": [10.0, 5.0, 20.0],
+            "TOTAL_VALUE": [1000.0, 500.0, 2000.0],
+            "CURRENT_VALUE": [1200.0, 600.0, 2500.0],
+            "TOTAL_DIVIDENDS": [10.0, 5.0, 30.0],
+        })
+        result = portfolio_engine.portfolio_summary(df)
+        assert len(result) == 2
+        tickers = [r["TICKER"] for r in result]
+        assert "AAPL" in tickers
+        assert "MSFT" in tickers
+
+    def test_sums_correctly(self):
+        df = pd.DataFrame({
+            "TICKER": ["AAPL", "AAPL"],
+            "CURRENT_SHARES": [10.0, 5.0],
+            "TOTAL_VALUE": [1000.0, 500.0],
+            "CURRENT_VALUE": [1200.0, 600.0],
+            "TOTAL_DIVIDENDS": [10.0, 5.0],
+        })
+        result = portfolio_engine.portfolio_summary(df)
+        assert len(result) == 1
+        r = result[0]
+        assert r["SHARES_OWNED"] == 15.0
+        assert r["COST_BASIS"] == 1500.0
+        assert r["CURRENT_VALUE"] == 1800.0
+        assert r["DIVIDENDS"] == 15.0
+
+    def test_computes_gain_loss(self):
+        df = pd.DataFrame({
+            "TICKER": ["AAPL"],
+            "CURRENT_SHARES": [10.0],
+            "TOTAL_VALUE": [1000.0],
+            "CURRENT_VALUE": [1200.0],
+            "TOTAL_DIVIDENDS": [0.0],
+        })
+        result = portfolio_engine.portfolio_summary(df)
+        assert result[0]["GAIN_LOSS"] == 200.0
+
+    def test_sorted_by_current_value_desc(self):
+        df = pd.DataFrame({
+            "TICKER": ["SMALL", "BIG", "MED"],
+            "CURRENT_SHARES": [1.0, 1.0, 1.0],
+            "TOTAL_VALUE": [100.0, 300.0, 200.0],
+            "CURRENT_VALUE": [100.0, 300.0, 200.0],
+            "TOTAL_DIVIDENDS": [0.0, 0.0, 0.0],
+        })
+        result = portfolio_engine.portfolio_summary(df)
+        assert result[0]["TICKER"] == "BIG"
+        assert result[1]["TICKER"] == "MED"
+        assert result[2]["TICKER"] == "SMALL"
+
+    def test_rounds_to_two_decimals(self):
+        df = pd.DataFrame({
+            "TICKER": ["AAPL"],
+            "CURRENT_SHARES": [3.33333],
+            "TOTAL_VALUE": [100.111],
+            "CURRENT_VALUE": [200.999],
+            "TOTAL_DIVIDENDS": [5.555],
+        })
+        result = portfolio_engine.portfolio_summary(df)
+        r = result[0]
+        assert r["SHARES_OWNED"] == 3.33
+        assert r["COST_BASIS"] == 100.11
+        assert r["CURRENT_VALUE"] == 201.0
+        assert r["DIVIDENDS"] == 5.56
+
+
+class TestUpdatePrices:
+    def test_cache_current_returns_ok(self):
+        """When cache already covers the last market close, skip fetch."""
+        close_date = portfolio_engine._last_market_close()
+        # Write a cache with data through close_date
+        dates = pd.date_range(end=close_date, periods=3)
+        cache = pd.DataFrame({"AAPL": [100.0, 101.0, 102.0]}, index=dates)
+        cache.to_csv(_paths()["price_history"])
+        # Write a portfolio with AAPL
+        _write_transaction("2025-01-02", "AAPL", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        result = portfolio_engine.update_prices(_paths())
+        assert result["status"] == "ok"
+
+    def test_empty_tickers_returns_ok(self):
+        """No tickers in portfolio → immediate ok."""
+        result = portfolio_engine.update_prices(_paths())
+        assert result["status"] == "ok"
+
+    def test_dedup_cached_index(self):
+        """Cached CSV with duplicate dates should not crash."""
+        dates = pd.to_datetime(["2025-01-02", "2025-01-02", "2025-01-03"])
+        cache = pd.DataFrame({"AAPL": [100.0, 100.5, 101.0]}, index=dates)
+        cache.index.name = "Date"
+        cache.to_csv(_paths()["price_history"])
+        # Should not raise
+        cached = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        cached = cached[~cached.index.duplicated(keep="last")]
+        assert len(cached) == 2
+
+
+class TestNeedsRefresh:
+    def test_true_when_no_file(self):
+        assert portfolio_engine.needs_refresh(_paths()) is True
+
+    def test_false_when_fresh(self):
+        close_date = portfolio_engine._last_market_close()
+        portfolio_engine._set_last_updated(_paths(), close_date)
+        assert portfolio_engine.needs_refresh(_paths()) is False
+
+    def test_true_when_stale(self):
+        from datetime import date, timedelta
+        old_date = date(2020, 1, 1)
+        portfolio_engine._set_last_updated(_paths(), old_date)
+        assert portfolio_engine.needs_refresh(_paths()) is True
+
+
+class TestGetLastUpdated:
+    def test_returns_none_when_missing(self):
+        assert portfolio_engine.get_last_updated(_paths()) is None
+
+    def test_returns_timestamp(self):
+        from datetime import date
+        portfolio_engine._set_last_updated(_paths(), date(2025, 6, 15))
+        result = portfolio_engine.get_last_updated(_paths())
+        assert result is not None
+        assert "2025" in result
