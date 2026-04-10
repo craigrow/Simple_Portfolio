@@ -19,6 +19,8 @@
         th.sortable:hover { background: #dde; }
         th.sort-asc::after { content: " ▲"; }
         th.sort-desc::after { content: " ▼"; }
+        .range-btn { padding: 0.2rem 0.6rem; cursor: pointer; border: 1px solid #ccc; background: #f8f8f8; border-radius: 3px; }
+        .range-btn:hover { background: #e0e0e0; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -136,29 +138,97 @@
     {% endif %}
 
     {% if history %}
+    <div style="margin-bottom:0.5rem; display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+        <strong>Range:</strong>
+        <button class="range-btn" data-range="ytd" onclick="setRange('ytd')">YTD</button>
+        <button class="range-btn" data-range="1y" onclick="setRange('1y')">1Y</button>
+        <button class="range-btn" data-range="3y" onclick="setRange('3y')">3Y</button>
+        <button class="range-btn" data-range="5y" onclick="setRange('5y')">5Y</button>
+        <button class="range-btn" data-range="all" onclick="setRange('all')">All</button>
+        <span style="margin-left:1rem; font-size:0.85rem; color:#666;" id="range-label"></span>
+    </div>
+    <input type="range" id="range-slider" min="0" max="100" value="0" style="width:100%; margin-bottom:0.5rem;">
     <canvas id="historyChart" style="max-height:400px; margin-bottom:2rem;"></canvas>
     <script>
-    new Chart(document.getElementById("historyChart"), {
-        type: "line",
-        data: {
-            labels: {{ history|map(attribute='DATE')|list|tojson }},
-            datasets: [
-                {label: "Main Portfolio", data: {{ history|map(attribute='MAIN')|list|tojson }}, borderColor: "#2563eb", borderWidth: 2, pointRadius: 0, fill: false},
-                {label: "VOO (S&P 500)", data: {{ history|map(attribute='VOO')|list|tojson }}, borderColor: "#16a34a", borderWidth: 2, pointRadius: 0, fill: false},
-                {label: "QQQ (NASDAQ)", data: {{ history|map(attribute='QQQ')|list|tojson }}, borderColor: "#dc2626", borderWidth: 2, pointRadius: 0, fill: false}
-            ]
-        },
-        options: {
-            responsive: true,
-            scales: {
-                x: {ticks: {maxTicksLimit: 12}},
-                y: {ticks: {callback: v => "$" + v.toLocaleString()}}
+    (function() {
+        var allDates = {{ history|map(attribute='DATE')|list|tojson }};
+        var allMain = {{ history|map(attribute='MAIN')|list|tojson }};
+        var allVoo = {{ history|map(attribute='VOO')|list|tojson }};
+        var allQqq = {{ history|map(attribute='QQQ')|list|tojson }};
+        var chart = new Chart(document.getElementById("historyChart"), {
+            type: "line",
+            data: {
+                labels: allDates,
+                datasets: [
+                    {label: "Main Portfolio", data: allMain, borderColor: "#2563eb", borderWidth: 2, pointRadius: 0, fill: false},
+                    {label: "VOO (S&P 500)", data: allVoo, borderColor: "#16a34a", borderWidth: 2, pointRadius: 0, fill: false},
+                    {label: "QQQ (NASDAQ)", data: allQqq, borderColor: "#dc2626", borderWidth: 2, pointRadius: 0, fill: false}
+                ]
             },
-            plugins: {
-                tooltip: {callbacks: {label: ctx => ctx.dataset.label + ": $" + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2})}}
+            options: {
+                responsive: true,
+                animation: false,
+                scales: {
+                    x: {ticks: {maxTicksLimit: 12}},
+                    y: {ticks: {callback: function(v) { return "$" + v.toLocaleString(); }}}
+                },
+                plugins: {
+                    tooltip: {callbacks: {label: function(ctx) { return ctx.dataset.label + ": $" + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2}); }}}
+                }
             }
+        });
+
+        var slider = document.getElementById("range-slider");
+        var label = document.getElementById("range-label");
+        var activeRange = "all";
+
+        function updateChart(startIdx) {
+            var dates = allDates.slice(startIdx);
+            var main = allMain.slice(startIdx);
+            var voo = allVoo.slice(startIdx);
+            var qqq = allQqq.slice(startIdx);
+            chart.data.labels = dates;
+            chart.data.datasets[0].data = main;
+            chart.data.datasets[1].data = voo;
+            chart.data.datasets[2].data = qqq;
+            chart.update();
+            label.textContent = dates[0] + " — " + dates[dates.length - 1] + " (" + dates.length + " days)";
         }
-    });
+
+        function findDateIdx(targetDate) {
+            for (var i = 0; i < allDates.length; i++) {
+                if (allDates[i] >= targetDate) return i;
+            }
+            return 0;
+        }
+
+        window.setRange = function(range) {
+            activeRange = range;
+            document.querySelectorAll(".range-btn").forEach(function(b) {
+                b.style.fontWeight = b.dataset.range === range ? "bold" : "normal";
+            });
+            var now = new Date();
+            var y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+            var pad = function(n) { return n < 10 ? "0" + n : "" + n; };
+            var idx = 0;
+            if (range === "ytd") idx = findDateIdx(y + "-01-01");
+            else if (range === "1y") idx = findDateIdx((y - 1) + "-" + pad(m) + "-" + pad(d));
+            else if (range === "3y") idx = findDateIdx((y - 3) + "-" + pad(m) + "-" + pad(d));
+            else if (range === "5y") idx = findDateIdx((y - 5) + "-" + pad(m) + "-" + pad(d));
+            slider.value = idx;
+            slider.max = allDates.length - 1;
+            updateChart(idx);
+        };
+
+        slider.max = allDates.length - 1;
+        slider.addEventListener("input", function() {
+            activeRange = "";
+            document.querySelectorAll(".range-btn").forEach(function(b) { b.style.fontWeight = "normal"; });
+            updateChart(parseInt(slider.value));
+        });
+
+        setRange("all");
+    })();
     </script>
     {% endif %}
 
