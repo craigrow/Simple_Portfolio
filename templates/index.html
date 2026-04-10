@@ -105,8 +105,8 @@
             }
         }
 
-        function sortBy(col, type) {
-            var dir = (currentSort.col === col && currentSort.dir === "desc") ? "asc" : "desc";
+        function sortBy(col, type, forceDir) {
+            var dir = forceDir || ((currentSort.col === col && currentSort.dir === "desc") ? "asc" : "desc");
             currentSort = {col: col, dir: dir};
             data.sort(function(a, b) {
                 var va = a[col], vb = b[col];
@@ -124,7 +124,7 @@
             h.addEventListener("click", function() { sortBy(h.dataset.col, h.dataset.type); });
         });
 
-        sortBy("CURRENT_VALUE", "num");
+        sortBy("CURRENT_VALUE", "num", "desc");
     })();
     </script>
     {% endif %}
