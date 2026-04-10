@@ -546,6 +546,8 @@ def update_prices(paths, max_retries=3):
     earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
     if cached is not None and not cached.empty:
         start = (cached.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if cached.index.max().date() >= close_date:
+            return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
     elif earliest is not None:
         start = earliest.strftime("%Y-%m-%d")
     else:
