@@ -38,9 +38,9 @@ def index():
     current_prices = {}
     if not prices_df.empty:
         for col in prices_df.columns:
-            val = prices_df[col].iloc[-1]
-            if pd.notna(val):
-                current_prices[col] = round(float(val), 2)
+            last_idx = prices_df[col].last_valid_index()
+            if last_idx is not None:
+                current_prices[col] = round(float(prices_df[col].loc[last_idx]), 2)
 
     port_df, portfolio_value, portfolio_divs = portfolio_engine.enrich_portfolio(
         port_df, splits_df, dividends_df, current_prices)
