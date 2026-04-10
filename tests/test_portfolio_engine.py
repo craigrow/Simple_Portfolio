@@ -37,6 +37,7 @@ def setup_teardown(tmp_path):
         "price_history": str(data_dir / "price_history.csv"),
         "config": str(test_portfolio / "config.json"),
         "last_updated": str(data_dir / "last_updated.txt"),
+        "daily_values": str(data_dir / "daily_values.csv"),
     }
 
     with open(portfolio_engine._test_paths["transactions"], "w", newline="") as f:
@@ -615,3 +616,93 @@ class TestRefreshDataErrorHandling:
                         result = portfolio_engine.refresh_data(_paths())
         assert result["status"] == "incomplete"
         assert "X" in result["failed_tickers"]
+
+
+class TestVectorizedPortfolioValues:
+    def test_empty_portfolio(self):
+        prices = pd.DataFrame({"AAPL": [100.0]}, index=pd.date_range("2025-01-02", periods=1))
+        result = portfolio_engine._vectorized_portfolio_values(
+            pd.DataFrame(), pd.DataFrame(columns=["TICKER", "DATE", "RATIO"]),
+            pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"]), prices)
+        assert (result == 0.0).all()
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_single_holding(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        dates = pd.date_range("2025-01-02", periods=3)
+        prices = pd.DataFrame({"MSFT": [100.0, 105.0, 110.0]}, index=dates)
+        splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        divs = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+        result = portfolio_engine._vectorized_portfolio_values(port_df, splits, divs, prices)
+        assert result.iloc[0] == 1000.0  # 10 shares × $100
+        assert result.iloc[2] == 1100.0  # 10 shares × $110
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_holding_before_purchase_is_zero(self, mock_price):
+        _write_transaction("2025-01-03", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        dates = pd.date_range("2025-01-02", periods=3)
+        prices = pd.DataFrame({"MSFT": [100.0, 105.0, 110.0]}, index=dates)
+        splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        divs = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+        result = portfolio_engine._vectorized_portfolio_values(port_df, splits, divs, prices)
+        assert result.iloc[0] == 0.0  # Before purchase
+        assert result.iloc[1] == 1050.0  # 10 × $105
+
+
+class TestComputeDailyValues:
+    def test_empty_portfolio_returns_empty(self):
+        result = portfolio_engine.compute_daily_values(_paths())
+        assert result == []
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_computes_and_caches(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        dates = pd.date_range("2025-01-02", periods=3)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0, 110.0],
+            "VOO": [500.0, 505.0, 510.0],
+            "QQQ": [400.0, 405.0, 410.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        result = portfolio_engine.compute_daily_values(_paths())
+        assert len(result) == 3
+        assert result[0]["MAIN"] == 1000.0
+        # Cache file should exist
+        assert os.path.exists(_paths()["daily_values"])
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_cache_hit_skips_recompute(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        dates = pd.date_range("2025-01-02", periods=2)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0], "VOO": [500.0, 505.0], "QQQ": [400.0, 405.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        r1 = portfolio_engine.compute_daily_values(_paths())
+        r2 = portfolio_engine.compute_daily_values(_paths())
+        assert len(r1) == len(r2)
+        assert r1[0]["MAIN"] == r2[0]["MAIN"]
+
+
+class TestGetCachedDailyValues:
+    def test_no_cache_returns_empty(self):
+        assert portfolio_engine.get_cached_daily_values(_paths()) == []
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_reads_existing_cache(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        dates = pd.date_range("2025-01-02", periods=2)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0], "VOO": [500.0, 505.0], "QQQ": [400.0, 405.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        portfolio_engine.compute_daily_values(_paths())
+        result = portfolio_engine.get_cached_daily_values(_paths())
+        assert len(result) == 2
