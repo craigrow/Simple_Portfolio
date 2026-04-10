@@ -77,7 +77,7 @@
         var table = document.getElementById("pv-table");
         var tbody = table.querySelector("tbody");
         var headers = table.querySelectorAll("th.sortable");
-        var currentSort = {col: "CURRENT_VALUE", dir: "desc"};
+        var currentSort = {col: null, dir: null};
 
         function render() {
             tbody.innerHTML = "";
