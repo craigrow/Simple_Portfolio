@@ -561,9 +561,12 @@ def update_prices(paths, max_retries=3):
     # Merge new data into cache
     if new_frames:
         new_data = pd.concat(new_frames, axis=1)
+        new_data = new_data.loc[:, ~new_data.columns.duplicated(keep="last")]
+        new_data = new_data[~new_data.index.duplicated(keep="last")]
         if not new_data.empty:
             if not cached.empty:
                 combined = pd.concat([cached, new_data])
+                combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
                 combined = combined[~combined.index.duplicated(keep="last")].sort_index()
             else:
                 combined = new_data.sort_index()
