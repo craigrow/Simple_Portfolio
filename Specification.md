@@ -30,11 +30,11 @@ feature/xxx  →  staging  →  main
 |---|---|---|
 | Service name | simple-portfolio | simple-portfolio-staging |
 | Branch | `main` | `staging` |
-| URL | simple-portfolio-u41t.onrender.com | TBD |
+| URL | simple-portfolio-u41t.onrender.com | simple-portfolio-staging.onrender.com |
 | Persistent disk | `/data` (existing) | `/data` (separate) |
 | Auto-deploy | On push to `main` | On push to `staging` |
 
-**Status: Not yet implemented.** Both services use the same repo, same start command, same build settings — just different branches and separate persistent disks.
+**Status: Implemented.** Both services use the same repo, same start command, same build settings — just different branches and separate persistent disks.
 
 ### Overview
 The goal of the simple portfolio tracker is to show how a set of portfolio transactions performed against the S&P 500 and the NASDAQ. To achieve this, we will create shadow portfolios for VOO and QQQ. For each portfolio investment, we will assume the same dollar amount was invested in VOO and QQQ. 
