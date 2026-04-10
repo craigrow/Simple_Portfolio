@@ -542,3 +542,76 @@ class TestGetLastUpdated:
         result = portfolio_engine.get_last_updated(_paths())
         assert result is not None
         assert "2025" in result
+
+
+class TestUpdatePricesDuplicateColumns:
+    @patch.object(portfolio_engine, "_last_market_close")
+    def test_retry_frames_with_overlapping_columns(self, mock_close):
+        """Retry loop producing overlapping DataFrames should not crash concat."""
+        from datetime import date, timedelta
+        mock_close.return_value = date(2025, 1, 10)
+        _write_transaction("2025-01-02", "AAPL", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        # Write cache missing the close date so update_prices will fetch
+        dates = pd.date_range("2025-01-02", "2025-01-08")
+        cache = pd.DataFrame({"AAPL": range(len(dates))}, index=dates, dtype=float)
+        cache.index.name = "Date"
+        cache.to_csv(_paths()["price_history"])
+        # Mock yf.download to return overlapping frames (simulating retries)
+        fake = pd.DataFrame({"AAPL": [150.0, 151.0, 152.0]},
+                            index=pd.date_range("2025-01-08", periods=3))
+        with patch("portfolio_engine.yf.download", return_value=fake):
+            result = portfolio_engine.update_prices(_paths())
+        # Should not crash, and cache should have unique index
+        cached = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        assert cached.index.is_unique
+        assert not cached.columns.duplicated().any()
+
+    @patch.object(portfolio_engine, "_last_market_close")
+    def test_cache_written_with_unique_index(self, mock_close):
+        """After a full update cycle, price_history.csv should have no duplicate dates."""
+        from datetime import date
+        mock_close.return_value = date(2025, 1, 5)
+        _write_transaction("2025-01-02", "MSFT", 200.0, 5.0)
+        portfolio_engine.sync(_paths())
+        # Pre-seed cache with duplicates
+        dates = pd.to_datetime(["2025-01-02", "2025-01-02", "2025-01-03"])
+        cache = pd.DataFrame({"MSFT": [200.0, 200.5, 201.0]}, index=dates)
+        cache.index.name = "Date"
+        cache.to_csv(_paths()["price_history"])
+        fake = pd.DataFrame({"MSFT": [202.0, 203.0]},
+                            index=pd.date_range("2025-01-04", periods=2))
+        with patch("portfolio_engine.yf.download", return_value=fake):
+            portfolio_engine.update_prices(_paths())
+        cached = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        assert cached.index.is_unique
+
+
+class TestRefreshDataErrorHandling:
+    def test_returns_result_when_splits_fail(self):
+        """refresh_data should still return update_prices result even if splits throw."""
+        with patch.object(portfolio_engine, "sync"):
+            with patch.object(portfolio_engine, "sync_splits", side_effect=RuntimeError("split error")):
+                with patch.object(portfolio_engine, "sync_dividends"):
+                    with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
+                        result = portfolio_engine.refresh_data(_paths())
+        assert result["status"] == "ok"
+
+    def test_returns_result_when_dividends_fail(self):
+        """refresh_data should still return update_prices result even if dividends throw."""
+        with patch.object(portfolio_engine, "sync"):
+            with patch.object(portfolio_engine, "sync_splits"):
+                with patch.object(portfolio_engine, "sync_dividends", side_effect=RuntimeError("div error")):
+                    with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
+                        result = portfolio_engine.refresh_data(_paths())
+        assert result["status"] == "ok"
+
+    def test_returns_result_when_both_fail(self):
+        """refresh_data should still return update_prices result even if both splits and dividends throw."""
+        with patch.object(portfolio_engine, "sync"):
+            with patch.object(portfolio_engine, "sync_splits", side_effect=RuntimeError("split")):
+                with patch.object(portfolio_engine, "sync_dividends", side_effect=RuntimeError("div")):
+                    with patch.object(portfolio_engine, "update_prices", return_value={"status": "incomplete", "failed_tickers": ["X"]}):
+                        result = portfolio_engine.refresh_data(_paths())
+        assert result["status"] == "incomplete"
+        assert "X" in result["failed_tickers"]
