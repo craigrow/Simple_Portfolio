@@ -5,6 +5,37 @@
 - **Repository**: https://github.com/craigrow/Simple_Portfolio.git
 - **Branching policy**: All work must be done in a feature branch, never directly on `main`. Merge to `main` via pull request only after all tests pass.
 
+### Deployment Strategy (Planned)
+
+**Git Branching Model:**
+```
+feature/xxx  →  staging  →  main
+   (dev)        (test)     (prod)
+```
+
+- **main**: Production branch. Always stable. Auto-deploys to production Render instance.
+- **staging**: Integration/UAT branch. Auto-deploys to staging Render instance.
+- **feature/***: Development branches. Created from `staging`, merged back to `staging` via PR after all tests pass.
+
+**Workflow:**
+1. Create feature branch from `staging`.
+2. Develop and test locally. All 79+ tests must pass.
+3. Merge to `staging` → auto-deploys to staging Render for UAT.
+4. Verify on staging URL.
+5. When satisfied, merge `staging` → `main` → auto-deploys to production Render.
+
+**Render Environments:**
+
+| | Production | Staging |
+|---|---|---|
+| Service name | simple-portfolio | simple-portfolio-staging |
+| Branch | `main` | `staging` |
+| URL | simple-portfolio-u41t.onrender.com | TBD |
+| Persistent disk | `/data` (existing) | `/data` (separate) |
+| Auto-deploy | On push to `main` | On push to `staging` |
+
+**Status: Not yet implemented.** Both services use the same repo, same start command, same build settings — just different branches and separate persistent disks.
+
 ### Overview
 The goal of the simple portfolio tracker is to show how a set of portfolio transactions performed against the S&P 500 and the NASDAQ. To achieve this, we will create shadow portfolios for VOO and QQQ. For each portfolio investment, we will assume the same dollar amount was invested in VOO and QQQ. 
 
