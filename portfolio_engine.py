@@ -569,7 +569,7 @@ def update_prices(paths, max_retries=3):
             # Check which tickers got data for the close_date
             got = [t for t in remaining if t in close.columns
                    and close[t].last_valid_index() is not None
-                   and close[t].last_valid_index().date() >= close_date - timedelta(days=1)]
+                   and close[t].last_valid_index().date() >= close_date]
             remaining = [t for t in remaining if t not in got]
         except Exception:
             pass
