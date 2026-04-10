@@ -27,6 +27,7 @@ def get_paths(portfolio_id):
         "dividends": os.path.join(data, "dividends.csv"),
         "price_history": os.path.join(data, "price_history.csv"),
         "last_updated": os.path.join(data, "last_updated.txt"),
+        "daily_values": os.path.join(data, "daily_values.csv"),
         "config": os.path.join(root, "config.json"),
     }
 
@@ -488,6 +489,120 @@ def get_historical_values(portfolio_df, splits_df, dividends_df, prices_df):
             for d, v in totals.items()]
 
 
+def _vectorized_portfolio_values(portfolio_df, splits_df, dividends_df, prices_df):
+    """Compute daily portfolio value series using vectorized pandas operations.
+    Iterates over holdings (not days) — O(holdings) pandas ops."""
+    if portfolio_df.empty or prices_df.empty:
+        return pd.Series(0.0, index=prices_df.index)
+
+    dates = prices_df.index
+    totals = pd.Series(0.0, index=dates)
+
+    for _, row in portfolio_df.iterrows():
+        ticker = row["TICKER"]
+        purchase_dt = pd.to_datetime(row["DATE"])
+        shares = float(row["SHARES_PURCHASED"])
+        if ticker not in prices_df.columns:
+            continue
+        adj = get_adjusted_shares(ticker, shares, row["DATE"], splits_df)
+        # Vectorized: price × adjusted shares, zeroed before purchase date
+        price_series = prices_df[ticker].ffill().fillna(0.0)
+        mask = (dates >= purchase_dt).astype(float)
+        totals += price_series * adj * mask
+        # Vectorized dividends: cumulative sum applied as step function
+        if not dividends_df.empty:
+            ticker_divs = dividends_df[
+                (dividends_df["TICKER"] == ticker) &
+                (pd.to_datetime(dividends_df["DATE"]) > purchase_dt)
+            ]
+            for _, div in ticker_divs.iterrows():
+                div_dt = pd.to_datetime(div["DATE"])
+                div_amount = adj * float(div["AMOUNT"])
+                totals += div_amount * (dates >= div_dt).astype(float)
+
+    return totals
+
+
+def compute_daily_values(paths):
+    """Compute or update cached daily portfolio values for the chart.
+    Uses vectorized computation. Caches to daily_values.csv."""
+    port_df = read_csv(paths["portfolio"])
+    voo_df = read_csv(paths["shadow_voo"])
+    qqq_df = read_csv(paths["shadow_qqq"])
+    if port_df.empty:
+        return []
+
+    prices_path = paths["price_history"]
+    if not os.path.exists(prices_path):
+        return []
+    prices_df = pd.read_csv(prices_path, index_col=0, parse_dates=True)
+    if prices_df.empty:
+        return []
+
+    splits_df = _read_splits(paths)
+    dividends_df = _read_dividends(paths)
+
+    earliest = pd.to_datetime(port_df["DATE"]).min()
+    prices_df = prices_df.loc[earliest:]
+    if prices_df.empty:
+        return []
+
+    # Check cache validity
+    cache_path = paths["daily_values"]
+    txn_count = len(port_df) + len(voo_df) + len(qqq_df)
+    meta_path = cache_path + ".meta"
+
+    if os.path.exists(cache_path) and os.path.exists(meta_path):
+        with open(meta_path) as f:
+            cached_count = int(f.read().strip())
+        if cached_count == txn_count:
+            cached = pd.read_csv(cache_path, parse_dates=["DATE"])
+            last_cached = cached["DATE"].max()
+            new_prices = prices_df.loc[last_cached + pd.Timedelta(days=1):]
+            if new_prices.empty:
+                return cached.to_dict("records")
+            # Delta: compute only new days
+            main_vals = _vectorized_portfolio_values(port_df, splits_df, dividends_df, new_prices)
+            voo_vals = _vectorized_portfolio_values(voo_df, splits_df, dividends_df, new_prices)
+            qqq_vals = _vectorized_portfolio_values(qqq_df, splits_df, dividends_df, new_prices)
+            new_df = pd.DataFrame({
+                "DATE": new_prices.index.strftime("%Y-%m-%d"),
+                "MAIN": main_vals.round(2).values,
+                "VOO": voo_vals.round(2).values,
+                "QQQ": qqq_vals.round(2).values,
+            })
+            combined = pd.concat([cached, new_df], ignore_index=True)
+            combined.to_csv(cache_path, index=False)
+            return combined.to_dict("records")
+
+    # Full compute
+    main_vals = _vectorized_portfolio_values(port_df, splits_df, dividends_df, prices_df)
+    voo_vals = _vectorized_portfolio_values(voo_df, splits_df, dividends_df, prices_df)
+    qqq_vals = _vectorized_portfolio_values(qqq_df, splits_df, dividends_df, prices_df)
+
+    result = pd.DataFrame({
+        "DATE": prices_df.index.strftime("%Y-%m-%d"),
+        "MAIN": main_vals.round(2).values,
+        "VOO": voo_vals.round(2).values,
+        "QQQ": qqq_vals.round(2).values,
+    })
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    result.to_csv(cache_path, index=False)
+    with open(meta_path, "w") as f:
+        f.write(str(txn_count))
+    return result.to_dict("records")
+
+
+def get_cached_daily_values(paths):
+    """Read cached daily values for chart rendering. No computation."""
+    cache_path = paths["daily_values"]
+    if os.path.exists(cache_path):
+        df = pd.read_csv(cache_path)
+        if not df.empty:
+            return df.to_dict("records")
+    return []
+
+
 def get_last_updated(paths):
     """Read the last_updated date and return a display string."""
     if os.path.exists(paths["last_updated"]):
@@ -603,7 +718,7 @@ def update_prices(paths, max_retries=3):
 
 
 def refresh_data(paths):
-    """Full refresh: sync new transactions, splits, dividends, and update prices."""
+    """Full refresh: sync new transactions, splits, dividends, update prices, and recompute chart."""
     sync(paths)
     try:
         sync_splits(paths)
@@ -613,4 +728,9 @@ def refresh_data(paths):
         sync_dividends(paths)
     except Exception:
         pass
-    return update_prices(paths)
+    result = update_prices(paths)
+    try:
+        compute_daily_values(paths)
+    except Exception:
+        pass
+    return result

@@ -377,6 +377,9 @@ As a user, I want to see a portfolio view. The portfolio view is a table with th
     1. The table should be sortable by clicking on any column heading. 
     2. The default sort is Current Value.
     3. When sorted by Current Value, the stocks which make up 50% of the value of the portfolio shall have their rows shaded in grey so that the investor can easily see the largest stocks that make up half of their investment. 
+
+### User Story #9
+As a user, I want to know how my stocks are doing today, during market hours. 
 ---
 
 ### Backlog Stories

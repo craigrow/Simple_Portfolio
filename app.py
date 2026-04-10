@@ -49,8 +49,8 @@ def index():
     shadow_qqq_df, qqq_value, qqq_divs = portfolio_engine.enrich_portfolio(
         shadow_qqq_df, splits_df, dividends_df, current_prices)
 
-    # Chart disabled until historical calculation is optimized
-    history = []
+    # Chart from cached daily values (no computation on page load)
+    history = portfolio_engine.get_cached_daily_values(paths)
     columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS"]
     portfolio_summary = portfolio_engine.portfolio_summary(port_df)
     return render_template(
