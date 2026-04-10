@@ -35,6 +35,7 @@ def setup_teardown(tmp_path):
         "price_history": str(data_dir / "price_history.csv"),
         "config": str(test_portfolio / "config.json"),
         "last_updated": str(data_dir / "last_updated.txt"),
+        "daily_values": str(data_dir / "daily_values.csv"),
     }
 
     with open(portfolio_engine._test_paths["transactions"], "w", newline="") as f:
