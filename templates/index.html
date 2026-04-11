@@ -147,6 +147,7 @@ th.sort-desc::after { content: " ▼"; }
         <button class="tab active" onclick="showTab('holdings', this)">Holdings</button>
         <button class="tab" onclick="showTab('transactions', this)">Transactions</button>
         <button class="tab" onclick="showTab('history-table', this)">Daily Values</button>
+        <button class="tab" onclick="showTab('shadow-txns', this)">Shadow Portfolios</button>
     </div>
 
     {% if portfolio_summary %}
@@ -170,24 +171,29 @@ th.sort-desc::after { content: " ▼"; }
     {% endif %}
 
     <div id="transactions" class="tab-panel">
-        {% macro render_txn_table(title, rows, columns) %}
+        {% macro render_txn_table(title, rows, columns, show_title) %}
         {% if rows %}
+        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends"} %}
+        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS"] %}
         <table class="auto-sort">
             <thead>
-                <tr><th class="text-left" colspan="{{ columns|length }}" style="font-size:0.9rem; text-transform:none; letter-spacing:normal; padding:1rem 0.75rem;">{{ title }}</th></tr>
-                <tr>{% for col in columns %}<th class="sortable {{ 'text-left' if loop.index <= 2 else 'text-right' }}">{{ col }}</th>{% endfor %}</tr>
+                {% if show_title %}<tr><th class="text-left" colspan="{{ columns|length }}" style="font-size:0.9rem; text-transform:none; letter-spacing:normal; padding:1rem 0.75rem;">{{ title }}</th></tr>{% endif %}
+                <tr>{% for col in columns %}<th class="sortable {{ 'text-left' if loop.index <= 2 else 'text-right' }}">{{ col_labels.get(col, col) }}</th>{% endfor %}</tr>
             </thead>
             <tbody>
                 {% for row in rows %}
-                <tr>{% for col in columns %}<td class="{{ 'text-left' if loop.index <= 2 else 'text-right' }}">{{ row[col] }}</td>{% endfor %}</tr>
+                <tr>{% for col in columns %}<td class="{{ 'text-left' if loop.index <= 2 else 'text-right' }}">{% if col in dollar_cols %}${{ "{:,.2f}".format(row[col]|float) }}{% elif col == "SHARES_PURCHASED" or col == "CURRENT_SHARES" %}{{ "{:,.2f}".format(row[col]|float) }}{% else %}{{ row[col] }}{% endif %}</td>{% endfor %}</tr>
                 {% endfor %}
             </tbody>
         </table>
         {% endif %}
         {% endmacro %}
-        {{ render_txn_table("Main Portfolio", portfolio, columns) }}
-        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, columns) }}
-        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, columns) }}
+        {{ render_txn_table("Main Portfolio", portfolio, columns, false) }}
+    </div>
+
+    <div id="shadow-txns" class="tab-panel">
+        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, columns, true) }}
+        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, columns, true) }}
     </div>
 
     <div id="history-table" class="tab-panel">

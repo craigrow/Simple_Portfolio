@@ -107,7 +107,7 @@ class TestIndexRoute:
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Main Portfolio" in resp.data
+        assert b"Transactions" in resp.data
         assert b"Shadow" in resp.data
         assert b"VOO" in resp.data
         assert b"QQQ" in resp.data
