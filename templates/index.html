@@ -108,7 +108,7 @@ th.sort-desc::after { content: " ▼"; }
             <div class="card-label">Your Portfolio</div>
             <div class="card-value">${{ "{:,.0f}".format(main_total) }}</div>
             <div class="card-sub">Invested ${{ "{:,.0f}".format(portfolio_invested) }} · Dividends ${{ "{:,.2f}".format(portfolio_divs) }}</div>
-            <div class="card-sub {{ 'positive' if main_gain >= 0 else 'negative' }}">{{ "{:+,.2f}".format(main_gain) }} ({{ "{:+.1f}".format(main_pct) }}%)</div>
+            <div class="card-sub {{ 'positive' if main_gain >= 0 else 'negative' }}">{{ "{:+,.2f}".format(main_gain) }}</div>
         </div>
         <div class="card">
             <div class="card-label">vs VOO (S&P 500)</div>
