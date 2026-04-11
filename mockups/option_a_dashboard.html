@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Option A — Dashboard Cards</title>
+<style>
+:root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --text: #f1f5f9; --muted: #94a3b8; --accent: #3b82f6;
+    --green: #22c55e; --red: #ef4444; --border: #475569;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; }
+.header h1 { font-size: 1.25rem; font-weight: 600; }
+.header-right { display: flex; align-items: center; gap: 1rem; font-size: 0.85rem; color: var(--muted); }
+.refresh-btn { background: var(--accent); color: white; border: none; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.9rem; }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+
+/* Summary cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+.card-label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+.card-value { font-size: 1.75rem; font-weight: 700; }
+.card-sub { font-size: 0.85rem; margin-top: 0.25rem; }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+
+/* Tabs */
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 1.5rem; overflow-x: auto; }
+.tab { padding: 0.75rem 1.25rem; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -2px; white-space: nowrap; font-size: 0.9rem; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th { text-align: left; padding: 0.75rem; color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+td { padding: 0.75rem; border-bottom: 1px solid var(--surface2); }
+tr:hover { background: var(--surface2); }
+
+/* Chart placeholder */
+.chart-area { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+.chart-placeholder { height: 250px; background: linear-gradient(135deg, var(--surface2), var(--bg)); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.range-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.range-pill { padding: 0.3rem 0.75rem; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; font-size: 0.8rem; }
+.range-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+/* Mobile */
+@media (max-width: 640px) {
+    .header { padding: 0.75rem 1rem; }
+    .header h1 { font-size: 1.1rem; }
+    .container { padding: 1rem; }
+    .card-value { font-size: 1.4rem; }
+    table { font-size: 0.8rem; }
+    th, td { padding: 0.5rem 0.4rem; }
+    .tab { padding: 0.6rem 0.9rem; font-size: 0.8rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>📊 Simple Portfolio</h1>
+    <div class="header-right">
+        <select><option>TQQQ Portfolio</option></select>
+        <span>Prices as of market close Apr 10</span>
+        <button class="refresh-btn">🔄 Refresh</button>
+    </div>
+</div>
+
+<div class="container">
+    <div class="cards">
+        <div class="card">
+            <div class="card-label">Your Portfolio</div>
+            <div class="card-value">$47,832.15</div>
+            <div class="card-sub">Invested: $42,500.00 · Dividends: $312.40</div>
+            <div class="card-sub positive">+$5,644.55 (+13.3%)</div>
+        </div>
+        <div class="card">
+            <div class="card-label">vs VOO (S&P 500)</div>
+            <div class="card-value">$46,218.90</div>
+            <div class="card-sub">Invested: $42,500.00 · Dividends: $890.22</div>
+            <div class="card-sub positive">You're ahead by $723.03</div>
+        </div>
+        <div class="card">
+            <div class="card-label">vs QQQ (NASDAQ)</div>
+            <div class="card-value">$48,105.33</div>
+            <div class="card-sub">Invested: $42,500.00 · Dividends: $445.10</div>
+            <div class="card-sub negative">You trail by $585.58</div>
+        </div>
+    </div>
+
+    <div class="chart-area">
+        <div class="range-bar">
+            <span class="range-pill">YTD</span>
+            <span class="range-pill active">1Y</span>
+            <span class="range-pill">3Y</span>
+            <span class="range-pill">5Y</span>
+            <span class="range-pill">All</span>
+        </div>
+        <div class="chart-placeholder">📈 Chart.js chart renders here</div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="showTab('holdings')">Holdings</div>
+        <div class="tab" onclick="showTab('transactions')">Transactions</div>
+        <div class="tab" onclick="showTab('history')">Daily Values</div>
+    </div>
+
+    <div id="holdings" class="tab-content active">
+        <table>
+            <thead><tr><th>Ticker</th><th>Shares</th><th>Cost Basis</th><th>Value</th><th>Gain/Loss</th></tr></thead>
+            <tbody>
+                <tr><td>TQQQ</td><td>150.00</td><td>$12,450.00</td><td>$14,220.00</td><td class="positive">+$1,770.00</td></tr>
+                <tr><td>AAPL</td><td>25.00</td><td>$4,375.00</td><td>$5,100.00</td><td class="positive">+$725.00</td></tr>
+                <tr><td>MSFT</td><td>12.00</td><td>$4,800.00</td><td>$5,040.00</td><td class="positive">+$240.00</td></tr>
+                <tr><td>PRYMY</td><td>200.00</td><td>$3,200.00</td><td>$2,880.00</td><td class="negative">-$320.00</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="transactions" class="tab-content">
+        <table>
+            <thead><tr><th>Date</th><th>Ticker</th><th>Price</th><th>Shares</th><th>Total</th></tr></thead>
+            <tbody>
+                <tr><td>2026-04-07</td><td>EMBJ</td><td>$24.50</td><td>100</td><td>$2,450.00</td></tr>
+                <tr><td>2026-03-31</td><td>PRYMY</td><td>$16.00</td><td>200</td><td>$3,200.00</td></tr>
+                <tr><td>2026-03-15</td><td>TQQQ</td><td>$83.00</td><td>50</td><td>$4,150.00</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="history" class="tab-content">
+        <table>
+            <thead><tr><th>Date</th><th>Portfolio</th><th>VOO</th><th>QQQ</th></tr></thead>
+            <tbody>
+                <tr><td>2026-04-10</td><td>$47,832.15</td><td>$46,218.90</td><td>$48,105.33</td></tr>
+                <tr><td>2026-04-09</td><td>$47,510.00</td><td>$46,050.00</td><td>$47,890.00</td></tr>
+                <tr><td>2026-04-08</td><td>$47,200.00</td><td>$45,800.00</td><td>$47,600.00</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function showTab(id) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

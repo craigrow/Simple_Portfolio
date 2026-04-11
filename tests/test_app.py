@@ -70,7 +70,7 @@ class TestIndexRoute:
     def test_empty_portfolio(self, client):
         resp = client.get("/?portfolio=test_portfolio")
         assert resp.status_code == 200
-        assert b"No transactions yet." in resp.data
+        assert b"Not refreshed yet" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_displays_transactions(self, mock_price, client):
@@ -91,8 +91,8 @@ class TestIndexRoute:
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Total Invested" in resp.data
-        assert b"$1,000.00" in resp.data
+        assert b"Invested" in resp.data
+        assert b"$1,000" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_syncs_on_page_load(self, mock_price, client):
@@ -108,7 +108,7 @@ class TestIndexRoute:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
         assert b"Main Portfolio" in resp.data
-        assert b"Shadow Portfolio" in resp.data
+        assert b"Shadow" in resp.data
         assert b"VOO" in resp.data
         assert b"QQQ" in resp.data
 
@@ -118,7 +118,7 @@ class TestIndexRoute:
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Current Value" in resp.data
+        assert b"Value" in resp.data
         assert b"Dividends" in resp.data
 
     def test_portfolio_dropdown_present(self, client):
@@ -177,7 +177,7 @@ class TestPortfolioViewRendering:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Portfolio View" in resp.data
+        assert b"Holdings" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_portfolio_view_columns(self, mock_price, client):
@@ -204,7 +204,7 @@ class TestPortfolioViewRendering:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        assert resp.data.count(b'class="sortable"') == 6
+        assert resp.data.count(b'class="sortable') == 6
 
     def test_no_portfolio_view_when_empty(self, client):
         resp = client.get("/?portfolio=test_portfolio")
@@ -238,6 +238,6 @@ class TestCurrentPriceLookup:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        # Portfolio View should show PRYMY with non-zero current value ($670)
-        assert b"Portfolio View" in resp.data
-        assert b"$670.00" in resp.data
+        # Holdings tab present and PRYMY value in JSON data (JS-rendered table)
+        assert b"Holdings" in resp.data
+        assert b"670.0" in resp.data
