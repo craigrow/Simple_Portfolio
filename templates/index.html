@@ -60,6 +60,8 @@ th.sort-desc::after { content: " ▼"; }
 .text-left { text-align: left; white-space: nowrap; width: 1%; }
 td:first-child, thead th:first-child { position: sticky; left: 0; z-index: 2; background: var(--surface); }
 thead th:first-child { background: var(--surface2); z-index: 3; }
+td:nth-child(2), thead th:nth-child(2) { position: sticky; z-index: 2; background: var(--surface); }
+thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 .pv-top50 td { background: rgba(59,130,246,0.08); }
 
 @media (max-width: 640px) {
@@ -349,6 +351,17 @@ function showTab(id, btn) {
     setRange("all");
 })();
 {% endif %}
+
+// Sticky column offsets: pin first two columns
+document.querySelectorAll(".tab-panel table").forEach(function(table) {
+    var firstTh = table.querySelector("thead tr:last-child th:first-child");
+    if (firstTh) {
+        var w = firstTh.offsetWidth;
+        table.querySelectorAll("td:nth-child(2), thead th:nth-child(2)").forEach(function(el) {
+            el.style.left = w + "px";
+        });
+    }
+});
 
 // Generic sortable tables
 document.querySelectorAll("table.auto-sort").forEach(function(table) {
