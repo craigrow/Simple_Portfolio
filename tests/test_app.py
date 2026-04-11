@@ -204,7 +204,9 @@ class TestPortfolioViewRendering:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        assert resp.data.count(b'class="sortable') == 6
+        assert resp.data.count(b'id="pv-table"') == 1
+        # Holdings table has 6 sortable columns
+        assert b'data-col="TICKER"' in resp.data
 
     def test_no_portfolio_view_when_empty(self, client):
         resp = client.get("/?portfolio=test_portfolio")

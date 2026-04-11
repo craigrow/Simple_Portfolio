@@ -32,6 +32,7 @@ select { background: var(--surface2); color: var(--text); border: 1px solid var(
 .negative { color: var(--red); }
 
 .chart-area { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+.chart-container { position: relative; height: 300px; }
 .range-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
 .range-pill { padding: 0.3rem 0.75rem; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; font-size: 0.8rem; background: transparent; }
 .range-pill:hover { border-color: var(--accent); color: var(--text); }
@@ -70,6 +71,7 @@ th.sort-desc::after { content: " ▼"; }
     .tab { padding: 0.6rem 0.9rem; font-size: 0.8rem; }
     .tab-panel { max-height: calc(100vh - 340px); }
     .chart-area { padding: 1rem; }
+    .chart-container { height: 250px; }
 }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -135,7 +137,9 @@ th.sort-desc::after { content: " ▼"; }
             <span id="range-label"></span>
         </div>
         <input type="range" id="range-slider" min="0" max="100" value="0">
-        <canvas id="historyChart" style="max-height:300px;"></canvas>
+        <div class="chart-container">
+            <canvas id="historyChart"></canvas>
+        </div>
     </div>
     {% endif %}
 
@@ -168,10 +172,10 @@ th.sort-desc::after { content: " ▼"; }
     <div id="transactions" class="tab-panel">
         {% macro render_txn_table(title, rows, columns) %}
         {% if rows %}
-        <table>
+        <table class="auto-sort">
             <thead>
                 <tr><th class="text-left" colspan="{{ columns|length }}" style="font-size:0.9rem; text-transform:none; letter-spacing:normal; padding:1rem 0.75rem;">{{ title }}</th></tr>
-                <tr>{% for col in columns %}<th class="{{ 'text-left' if loop.index <= 2 else 'text-right' }}">{{ col }}</th>{% endfor %}</tr>
+                <tr>{% for col in columns %}<th class="sortable {{ 'text-left' if loop.index <= 2 else 'text-right' }}">{{ col }}</th>{% endfor %}</tr>
             </thead>
             <tbody>
                 {% for row in rows %}
@@ -188,8 +192,8 @@ th.sort-desc::after { content: " ▼"; }
 
     <div id="history-table" class="tab-panel">
         {% if history %}
-        <table>
-            <thead><tr><th class="text-left">Date</th><th class="text-right">Portfolio</th><th class="text-right">VOO</th><th class="text-right">QQQ</th></tr></thead>
+        <table class="auto-sort">
+            <thead><tr><th class="sortable text-left">Date</th><th class="sortable text-right">Portfolio</th><th class="sortable text-right">VOO</th><th class="sortable text-right">QQQ</th></tr></thead>
             <tbody>
                 {% for row in history %}
                 <tr><td class="text-left">{{ row.DATE }}</td><td class="text-right">${{ "{:,.2f}".format(row.MAIN) }}</td><td class="text-right">${{ "{:,.2f}".format(row.VOO) }}</td><td class="text-right">${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
@@ -280,7 +284,7 @@ function showTab(id, btn) {
             ]
         },
         options: {
-            responsive: true, animation: false,
+            responsive: true, maintainAspectRatio: false, animation: false,
             scales: {
                 x: {ticks: {maxTicksLimit: 10, color: "#94a3b8"}, grid: {color: "#334155"}},
                 y: {ticks: {callback: function(v) { return "$" + v.toLocaleString(); }, color: "#94a3b8"}, grid: {color: "#334155"}}
@@ -332,6 +336,32 @@ function showTab(id, btn) {
     setRange("all");
 })();
 {% endif %}
+
+// Generic sortable tables
+document.querySelectorAll("table.auto-sort").forEach(function(table) {
+    var headers = table.querySelectorAll("th.sortable");
+    var sortState = {col: -1, dir: null};
+    headers.forEach(function(th, colIdx) {
+        th.addEventListener("click", function() {
+            var tbody = table.querySelector("tbody");
+            var rows = Array.from(tbody.querySelectorAll("tr"));
+            var dir = (sortState.col === colIdx && sortState.dir === "desc") ? "asc" : "desc";
+            sortState = {col: colIdx, dir: dir};
+            rows.sort(function(a, b) {
+                var at = a.cells[colIdx].textContent.trim();
+                var bt = b.cells[colIdx].textContent.trim();
+                var an = parseFloat(at.replace(/[$,%]/g, ""));
+                var bn = parseFloat(bt.replace(/[$,%]/g, ""));
+                if (!isNaN(an) && !isNaN(bn)) { at = an; bt = bn; }
+                if (dir === "asc") return at < bt ? -1 : at > bt ? 1 : 0;
+                return at > bt ? -1 : at < bt ? 1 : 0;
+            });
+            rows.forEach(function(r) { tbody.appendChild(r); });
+            headers.forEach(function(h) { h.classList.remove("sort-asc", "sort-desc"); });
+            th.classList.add("sort-" + dir);
+        });
+    });
+});
 
 function refreshData() {
     var btn = document.getElementById("refresh-btn");
