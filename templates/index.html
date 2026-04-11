@@ -174,8 +174,8 @@ th.sort-desc::after { content: " ▼"; }
     <div id="transactions" class="tab-panel">
         {% macro render_txn_table(title, rows, columns, show_title) %}
         {% if rows %}
-        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends"} %}
-        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS"] %}
+        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends", "TOTAL_RETURN": "Total Return"} %}
+        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"] %}
         <table class="auto-sort">
             <thead>
                 {% if show_title %}<tr><th class="text-left" colspan="{{ columns|length }}" style="font-size:0.9rem; text-transform:none; letter-spacing:normal; padding:1rem 0.75rem;">{{ title }}</th></tr>{% endif %}

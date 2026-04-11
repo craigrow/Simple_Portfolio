@@ -51,7 +51,7 @@ def index():
 
     # Chart from cached daily values (no computation on page load)
     history = portfolio_engine.get_cached_daily_values(paths)
-    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS"]
+    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"]
     portfolio_summary = portfolio_engine.portfolio_summary(port_df)
     return render_template(
         "index.html",

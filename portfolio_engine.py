@@ -145,15 +145,30 @@ def load_all(paths):
     )
 
 
+def _is_market_open():
+    """Return True if US stock market is likely open right now."""
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    if now.weekday() >= 5:
+        return False
+    return 9 * 60 + 30 <= now.hour * 60 + now.minute < 16 * 60
+
+
 def _last_market_close():
     """Return the date of the most recent market close, using yfinance data.
     Accounts for weekends and holidays automatically."""
     data = yf.download("VOO", period="5d", progress=False)
     if not data.empty:
         last_date = data.index[-1]
-        if hasattr(last_date, 'date'):
-            return last_date.date()
-        return pd.Timestamp(last_date).date()
+        d = last_date.date() if hasattr(last_date, 'date') else pd.Timestamp(last_date).date()
+        # During market hours, yfinance may return today with partial data — use previous close
+        et = ZoneInfo("America/New_York")
+        now = datetime.now(et)
+        if d == now.date() and _is_market_open():
+            earlier = data.index[:-1]
+            if len(earlier):
+                return earlier[-1].date()
+        return d
     # Fallback: skip weekends only
     et = ZoneInfo("America/New_York")
     now = datetime.now(et)
@@ -337,6 +352,7 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
     enriched["CURRENT_SHARES"] = current_shares
     enriched["CURRENT_VALUE"] = current_values
     enriched["TOTAL_DIVIDENDS"] = total_dividends
+    enriched["TOTAL_RETURN"] = [round(cv + td, 2) for cv, td in zip(current_values, total_dividends)]
     return enriched, round(sum(current_values), 2), round(sum(total_dividends), 2)
 
 
@@ -604,13 +620,22 @@ def get_cached_daily_values(paths):
 
 
 def get_last_updated(paths):
-    """Read the last_updated date and return a display string."""
+    """Read the last_updated file and return a human-readable display string."""
     if os.path.exists(paths["last_updated"]):
         with open(paths["last_updated"]) as f:
             raw = f.read().strip()
         try:
-            dt = pd.to_datetime(raw)
-            return dt.strftime("%B %-d, %Y") + " 4:00 PM ET"
+            if "|intraday" in raw:
+                ts = raw.split("|")[0]
+                dt = pd.to_datetime(ts)
+                return "Prices as of " + dt.strftime("%-I:%M %p ET") + " (market open)"
+            elif "|close" in raw:
+                ds = raw.split("|")[0]
+                dt = pd.to_datetime(ds)
+                return "Prices as of market close " + dt.strftime("%B %-d, %Y")
+            else:
+                dt = pd.to_datetime(raw)
+                return "Prices as of market close " + dt.strftime("%B %-d, %Y")
         except Exception:
             return raw
     return None
@@ -623,31 +648,39 @@ def needs_refresh(paths):
     try:
         with open(paths["last_updated"]) as f:
             raw = f.read().strip()
-        updated_date = pd.to_datetime(raw).date()
+        date_part = raw.split("|")[0]
+        updated_date = pd.to_datetime(date_part).date()
         return updated_date < _last_market_close()
     except Exception:
         return True
 
 
-def _set_last_updated(paths, close_date):
-    """Write market close date to last_updated file (ISO format)."""
+def _set_last_updated(paths, close_date=None, intraday=False):
+    """Write last-updated info. Stores ISO timestamp for intraday, date for closing."""
     os.makedirs(os.path.dirname(paths["last_updated"]), exist_ok=True)
+    et = ZoneInfo("America/New_York")
+    if intraday:
+        val = datetime.now(et).strftime("%Y-%m-%dT%H:%M") + " ET|intraday"
+    else:
+        val = str(close_date) + "|close"
     with open(paths["last_updated"], "w") as f:
-        f.write(str(close_date))
-    return str(close_date)
+        f.write(val)
+    return val
 
 
 def update_prices(paths, max_retries=3):
     """Fetch prices for all tickers with retries, update cache, record timestamp.
-    Returns dict with status and any failed tickers."""
+    During market hours, fetches live prices without writing them to price_history.
+    Returns dict with status, last_updated, and optional current_prices for intraday."""
     import time
 
     all_tickers = sorted(_get_all_tickers(paths))
     if not all_tickers:
         close_date = _last_market_close()
-        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
+        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
 
     close_date = _last_market_close()
+    market_open = _is_market_open()
 
     # Load existing cache
     if os.path.exists(paths["price_history"]):
@@ -658,17 +691,48 @@ def update_prices(paths, max_retries=3):
     else:
         cached = pd.DataFrame()
 
-    # Determine start date for fetch
+    cache_current = (not cached.empty and cached.index.max().date() >= close_date)
+
+    # If cache covers last close and market is open, fetch live intraday prices
+    if cache_current and market_open:
+        try:
+            data = yf.download(all_tickers, period="1d", progress=False)
+            if not data.empty:
+                close = data["Close"]
+                if isinstance(close, pd.Series):
+                    close = close.to_frame(name=all_tickers[0])
+                live = {}
+                for t in all_tickers:
+                    if t in close.columns:
+                        idx = close[t].last_valid_index()
+                        if idx is not None:
+                            live[t] = round(float(close[t].loc[idx]), 2)
+                if live:
+                    # Write today's intraday row into cache (will be overwritten at close)
+                    today = pd.Timestamp(datetime.now(ZoneInfo("America/New_York")).date())
+                    intraday_row = pd.DataFrame(live, index=[today])
+                    hist = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+                    hist = hist[hist.index.date != today.date()]  # remove any existing today row
+                    combined = pd.concat([hist, intraday_row]).sort_index()
+                    combined.to_csv(paths["price_history"])
+                    _set_last_updated(paths, intraday=True)
+                    return {"status": "ok"}
+        except Exception:
+            pass
+        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
+
+    # If cache is current and market is closed, nothing to do
+    if cache_current:
+        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
+    # Backfill: determine start date for historical fetch
     port_df = read_csv(paths["portfolio"])
     earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
-    if cached is not None and not cached.empty:
+    if not cached.empty:
         start = (cached.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        if cached.index.max().date() >= close_date:
-            return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
     elif earliest is not None:
         start = earliest.strftime("%Y-%m-%d")
     else:
-        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date)}
+        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
 
     # Fetch with retries for missing tickers
     remaining = list(all_tickers)
@@ -713,7 +777,7 @@ def update_prices(paths, max_retries=3):
     if remaining:
         return {"status": "incomplete", "failed_tickers": remaining}
 
-    ts = _set_last_updated(paths, close_date)
+    ts = _set_last_updated(paths, close_date=close_date)
     return {"status": "ok", "last_updated": ts}
 
 
