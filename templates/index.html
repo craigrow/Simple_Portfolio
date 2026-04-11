@@ -58,6 +58,8 @@ th.sort-asc::after { content: " ▲"; }
 th.sort-desc::after { content: " ▼"; }
 .text-right { text-align: right; white-space: nowrap; }
 .text-left { text-align: left; white-space: nowrap; width: 1%; }
+td:first-child, thead th:first-child { position: sticky; left: 0; z-index: 2; background: var(--surface); }
+thead th:first-child { background: var(--surface2); z-index: 3; }
 .pv-top50 td { background: rgba(59,130,246,0.08); }
 
 @media (max-width: 640px) {
