@@ -706,3 +706,76 @@ class TestGetCachedDailyValues:
         portfolio_engine.compute_daily_values(_paths())
         result = portfolio_engine.get_cached_daily_values(_paths())
         assert len(result) == 2
+
+
+class TestComputeIrr:
+    def test_positive_return(self):
+        """A $100 investment now worth $121 after exactly 2 years = ~10% annualized."""
+        from datetime import datetime, timedelta
+        date_str = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
+        irr = portfolio_engine.compute_irr(100, 121, date_str)
+        assert irr is not None
+        assert 9.0 <= irr <= 11.0  # ~10% annualized
+
+    def test_negative_return(self):
+        from datetime import datetime, timedelta
+        date_str = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        irr = portfolio_engine.compute_irr(100, 80, date_str)
+        assert irr is not None
+        assert irr < 0
+
+    def test_zero_days_returns_none(self):
+        from datetime import datetime
+        irr = portfolio_engine.compute_irr(100, 110, datetime.now().strftime("%Y-%m-%d"))
+        assert irr is None
+
+    def test_zero_invested_returns_none(self):
+        irr = portfolio_engine.compute_irr(0, 100, "2020-01-01")
+        assert irr is None
+
+    def test_future_date_returns_none(self):
+        irr = portfolio_engine.compute_irr(100, 110, "2099-01-01")
+        assert irr is None
+
+
+class TestAddComparisonColumns:
+    def _make_df(self, tickers, values, returns):
+        return pd.DataFrame({
+            "DATE": ["2024-01-01"] * len(tickers),
+            "TICKER": tickers,
+            "TOTAL_VALUE": values,
+            "TOTAL_RETURN": returns,
+        })
+
+    def test_adds_all_columns(self):
+        main = self._make_df(["AAPL"], [100], [120])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        result = portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert "IRR" in result.columns
+        assert "VS_VOO" in result.columns
+        assert "VS_QQQ" in result.columns
+
+    def test_vs_voo_calculation(self):
+        main = self._make_df(["AAPL"], [100], [120])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        result = portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert result.iloc[0]["VS_VOO"] == 10.0  # 120 - 110
+        assert result.iloc[0]["VS_QQQ"] == 5.0   # 120 - 115
+
+    def test_mismatched_lengths(self):
+        main = self._make_df(["AAPL", "MSFT"], [100, 200], [120, 250])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        result = portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert result.iloc[0]["VS_VOO"] == 10.0
+        assert pd.isna(result.iloc[1]["VS_VOO"])
+
+    def test_does_not_mutate_input(self):
+        main = self._make_df(["AAPL"], [100], [120])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        original_cols = list(main.columns)
+        portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert list(main.columns) == original_cols

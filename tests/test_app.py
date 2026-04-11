@@ -243,3 +243,28 @@ class TestCurrentPriceLookup:
         # Holdings tab present and PRYMY value in JSON data (JS-rendered table)
         assert b"Holdings" in resp.data
         assert b"670.0" in resp.data
+
+
+class TestComparisonColumns:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_irr_and_vs_columns_present(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"IRR" in resp.data
+        assert b"vs VOO" in resp.data
+        assert b"vs QQQ" in resp.data
+        assert b"Total Return" in resp.data
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_shadow_tabs_no_irr_columns(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        resp = client.get("/?portfolio=test_portfolio")
+        # Shadow tabs should exist but not contain IRR/vs columns
+        assert b"Shadow VOO" in resp.data
+        assert b"Shadow QQQ" in resp.data
