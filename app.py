@@ -13,7 +13,7 @@ def index():
     if not portfolios:
         return render_template("index.html", portfolios=[], portfolio_id=None,
                                portfolio_name=None, portfolio=[], shadow_voo=[],
-                               shadow_qqq=[], columns=[], portfolio_value=0,
+                               shadow_qqq=[], columns=[], shadow_columns=[], portfolio_value=0,
                                voo_value=0, qqq_value=0, portfolio_divs=0,
                                voo_divs=0, qqq_divs=0, portfolio_invested=0,
                                voo_invested=0, qqq_invested=0, history=[])
@@ -51,7 +51,9 @@ def index():
 
     # Chart from cached daily values (no computation on page load)
     history = portfolio_engine.get_cached_daily_values(paths)
-    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"]
+    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "IRR", "VS_VOO", "VS_QQQ"]
+    shadow_columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"]
+    port_df = portfolio_engine.add_comparison_columns(port_df, shadow_voo_df, shadow_qqq_df)
     portfolio_summary = portfolio_engine.portfolio_summary(port_df)
     return render_template(
         "index.html",
@@ -63,6 +65,7 @@ def index():
         shadow_voo=shadow_voo_df.to_dict("records") if not shadow_voo_df.empty else [],
         shadow_qqq=shadow_qqq_df.to_dict("records") if not shadow_qqq_df.empty else [],
         columns=columns,
+        shadow_columns=shadow_columns,
         portfolio_value=portfolio_value,
         voo_value=voo_value,
         qqq_value=qqq_value,

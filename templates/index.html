@@ -174,8 +174,9 @@ th.sort-desc::after { content: " ▼"; }
     <div id="transactions" class="tab-panel">
         {% macro render_txn_table(title, rows, columns, show_title) %}
         {% if rows %}
-        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends", "TOTAL_RETURN": "Total Return"} %}
-        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"] %}
+        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends", "TOTAL_RETURN": "Total Return", "IRR": "IRR", "VS_VOO": "vs VOO", "VS_QQQ": "vs QQQ"} %}
+        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "VS_VOO", "VS_QQQ"] %}
+        {% set pct_cols = ["IRR"] %}
         <table class="auto-sort">
             <thead>
                 {% if show_title %}<tr><th class="text-left" colspan="{{ columns|length }}" style="font-size:0.9rem; text-transform:none; letter-spacing:normal; padding:1rem 0.75rem;">{{ title }}</th></tr>{% endif %}
@@ -183,7 +184,7 @@ th.sort-desc::after { content: " ▼"; }
             </thead>
             <tbody>
                 {% for row in rows %}
-                <tr>{% for col in columns %}<td class="{{ 'text-left' if loop.index <= 2 else 'text-right' }}">{% if col in dollar_cols %}${{ "{:,.2f}".format(row[col]|float) }}{% elif col == "SHARES_PURCHASED" or col == "CURRENT_SHARES" %}{{ "{:,.2f}".format(row[col]|float) }}{% else %}{{ row[col] }}{% endif %}</td>{% endfor %}</tr>
+                <tr>{% for col in columns %}<td class="{{ 'text-left' if loop.index <= 2 else 'text-right' }}{% if col in dollar_cols and row[col] is not none %} {{ 'positive' if row[col]|float >= 0 else 'negative' }}{% endif %}{% if col in pct_cols and row[col] is not none %} {{ 'positive' if row[col]|float >= 0 else 'negative' }}{% endif %}">{% if row[col] is none %}—{% elif col in dollar_cols %}${{ "{:,.2f}".format(row[col]|float) }}{% elif col in pct_cols %}{{ "{:.1f}".format(row[col]|float) }}%{% elif col == "SHARES_PURCHASED" or col == "CURRENT_SHARES" %}{{ "{:,.2f}".format(row[col]|float) }}{% else %}{{ row[col] }}{% endif %}</td>{% endfor %}</tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -193,11 +194,11 @@ th.sort-desc::after { content: " ▼"; }
     </div>
 
     <div id="shadow-voo" class="tab-panel">
-        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, columns, false) }}
+        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, shadow_columns, false) }}
     </div>
 
     <div id="shadow-qqq" class="tab-panel">
-        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, columns, false) }}
+        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, shadow_columns, false) }}
     </div>
 
     <div id="history-table" class="tab-panel">

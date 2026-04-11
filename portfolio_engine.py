@@ -356,6 +356,41 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
     return enriched, round(sum(current_values), 2), round(sum(total_dividends), 2)
 
 
+def compute_irr(invested, total_return, purchase_date_str):
+    """Annualized return (IRR) for a single transaction."""
+    from datetime import datetime
+    try:
+        days = (datetime.now() - pd.to_datetime(purchase_date_str)).days
+        if days <= 0 or invested <= 0:
+            return None
+        return round(((total_return / invested) ** (365.0 / days) - 1) * 100, 2)
+    except Exception:
+        return None
+
+
+def add_comparison_columns(main_df, voo_df, qqq_df):
+    """Add IRR, vs VOO, vs QQQ columns to the main portfolio dataframe."""
+    irrs = []
+    vs_voo = []
+    vs_qqq = []
+    for i, row in main_df.iterrows():
+        invested = row["TOTAL_VALUE"]
+        irrs.append(compute_irr(invested, row["TOTAL_RETURN"], row["DATE"]))
+        if i < len(voo_df):
+            vs_voo.append(round(row["TOTAL_RETURN"] - voo_df.iloc[i]["TOTAL_RETURN"], 2))
+        else:
+            vs_voo.append(None)
+        if i < len(qqq_df):
+            vs_qqq.append(round(row["TOTAL_RETURN"] - qqq_df.iloc[i]["TOTAL_RETURN"], 2))
+        else:
+            vs_qqq.append(None)
+    main_df = main_df.copy()
+    main_df["IRR"] = irrs
+    main_df["VS_VOO"] = vs_voo
+    main_df["VS_QQQ"] = vs_qqq
+    return main_df
+
+
 def portfolio_summary(enriched_df):
     """Aggregate per-transaction data into per-ticker summary for portfolio view."""
     if enriched_df.empty:
