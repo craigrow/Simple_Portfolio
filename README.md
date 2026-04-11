@@ -57,7 +57,7 @@ pip install pytest  # first time only
 python -m pytest tests/ -v
 ```
 
-87 tests covering:
+98 tests covering:
 - **Unit tests** (`tests/test_portfolio_engine.py`): portfolio summary, price updates, splits, dividends, sync, dedup logic
 - **Functional tests** (`tests/test_app.py`): route responses, JSON API, template rendering, stale data handling
 
