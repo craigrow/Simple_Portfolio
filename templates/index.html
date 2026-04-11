@@ -147,7 +147,8 @@ th.sort-desc::after { content: " ▼"; }
         <button class="tab active" onclick="showTab('holdings', this)">Holdings</button>
         <button class="tab" onclick="showTab('transactions', this)">Transactions</button>
         <button class="tab" onclick="showTab('history-table', this)">Daily Values</button>
-        <button class="tab" onclick="showTab('shadow-txns', this)">Shadow Portfolios</button>
+        <button class="tab" onclick="showTab('shadow-voo', this)">Shadow VOO</button>
+        <button class="tab" onclick="showTab('shadow-qqq', this)">Shadow QQQ</button>
     </div>
 
     {% if portfolio_summary %}
@@ -191,9 +192,12 @@ th.sort-desc::after { content: " ▼"; }
         {{ render_txn_table("Main Portfolio", portfolio, columns, false) }}
     </div>
 
-    <div id="shadow-txns" class="tab-panel">
-        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, columns, true) }}
-        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, columns, true) }}
+    <div id="shadow-voo" class="tab-panel">
+        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, columns, false) }}
+    </div>
+
+    <div id="shadow-qqq" class="tab-panel">
+        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, columns, false) }}
     </div>
 
     <div id="history-table" class="tab-panel">
