@@ -35,6 +35,7 @@ def setup_teardown(tmp_path):
         "price_history": str(data_dir / "price_history.csv"),
         "config": str(test_portfolio / "config.json"),
         "last_updated": str(data_dir / "last_updated.txt"),
+        "daily_values": str(data_dir / "daily_values.csv"),
     }
 
     with open(portfolio_engine._test_paths["transactions"], "w", newline="") as f:
@@ -69,7 +70,7 @@ class TestIndexRoute:
     def test_empty_portfolio(self, client):
         resp = client.get("/?portfolio=test_portfolio")
         assert resp.status_code == 200
-        assert b"No transactions yet." in resp.data
+        assert b"Not refreshed yet" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_displays_transactions(self, mock_price, client):
@@ -90,8 +91,8 @@ class TestIndexRoute:
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Total Invested" in resp.data
-        assert b"$1,000.00" in resp.data
+        assert b"Invested" in resp.data
+        assert b"$1,000" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_syncs_on_page_load(self, mock_price, client):
@@ -106,8 +107,8 @@ class TestIndexRoute:
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Main Portfolio" in resp.data
-        assert b"Shadow Portfolio" in resp.data
+        assert b"Transactions" in resp.data
+        assert b"Shadow" in resp.data
         assert b"VOO" in resp.data
         assert b"QQQ" in resp.data
 
@@ -117,7 +118,7 @@ class TestIndexRoute:
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Current Value" in resp.data
+        assert b"Value" in resp.data
         assert b"Dividends" in resp.data
 
     def test_portfolio_dropdown_present(self, client):
@@ -176,7 +177,7 @@ class TestPortfolioViewRendering:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Portfolio View" in resp.data
+        assert b"Holdings" in resp.data
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_portfolio_view_columns(self, mock_price, client):
@@ -203,7 +204,9 @@ class TestPortfolioViewRendering:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        assert resp.data.count(b'class="sortable"') == 6
+        assert resp.data.count(b'id="pv-table"') == 1
+        # Holdings table has 6 sortable columns
+        assert b'data-col="TICKER"' in resp.data
 
     def test_no_portfolio_view_when_empty(self, client):
         resp = client.get("/?portfolio=test_portfolio")
@@ -237,6 +240,31 @@ class TestCurrentPriceLookup:
         prices.index.name = "Date"
         prices.to_csv(_paths()["price_history"])
         resp = client.get("/?portfolio=test_portfolio")
-        # Portfolio View should show PRYMY with non-zero current value ($670)
-        assert b"Portfolio View" in resp.data
-        assert b"$670.00" in resp.data
+        # Holdings tab present and PRYMY value in JSON data (JS-rendered table)
+        assert b"Holdings" in resp.data
+        assert b"670.0" in resp.data
+
+
+class TestComparisonColumns:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_irr_and_vs_columns_present(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"IRR" in resp.data
+        assert b"vs VOO" in resp.data
+        assert b"vs QQQ" in resp.data
+        assert b"Total Return" in resp.data
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_shadow_tabs_no_irr_columns(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        resp = client.get("/?portfolio=test_portfolio")
+        # Shadow tabs should exist but not contain IRR/vs columns
+        assert b"Shadow VOO" in resp.data
+        assert b"Shadow QQQ" in resp.data

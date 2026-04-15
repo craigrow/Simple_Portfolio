@@ -34,19 +34,20 @@ feature/xxx  →  staging  →  main
 ### Rules
 
 1. **All development happens in feature branches off `staging`.** No direct commits to `staging` or `main`.
-2. **Nothing merges to `main` unless all tests pass AND UAT passes on staging.** No exceptions.
-3. Create feature branches from `staging`:
+2. **All new features must include unit tests AND functional tests.** No feature is complete without test coverage for both the business logic (`test_portfolio_engine.py`) and the route/template behavior (`test_app.py`).
+3. **All tests must pass before merging to `staging`.** Run the full suite and confirm 0 failures:
+   ```bash
+   python -m pytest tests/ -v
+   ```
+4. **All tests must pass before merging `staging` → `main`.** No exceptions — a single failure blocks promotion to production.
+5. Create feature branches from `staging`:
    ```bash
    git checkout staging && git pull
    git checkout -b feature/my-feature
    ```
-4. All tests must pass before merging to `staging`:
-   ```bash
-   python -m pytest tests/ -v
-   ```
-5. Merge feature → `staging` (triggers staging deploy).
-6. UAT on staging URL. Verify the feature works end-to-end.
-7. Only after UAT passes: merge `staging` → `main` (triggers production deploy).
+6. Merge feature → `staging` (triggers staging deploy).
+7. UAT on staging URL. Verify the feature works end-to-end.
+8. Only after UAT passes AND all tests pass: merge `staging` → `main` (triggers production deploy).
 
 ## Running Tests
 
@@ -56,7 +57,7 @@ pip install pytest  # first time only
 python -m pytest tests/ -v
 ```
 
-79 tests covering:
+98 tests covering:
 - **Unit tests** (`tests/test_portfolio_engine.py`): portfolio summary, price updates, splits, dividends, sync, dedup logic
 - **Functional tests** (`tests/test_app.py`): route responses, JSON API, template rendering, stale data handling
 

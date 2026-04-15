@@ -5,227 +5,404 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Simple Portfolio Tracker</title>
     <style>
-        body { font-family: sans-serif; margin: 2rem; }
-        table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
-        th, td { border: 1px solid #ccc; padding: 0.5rem; text-align: right; }
-        th { background: #f0f0f0; }
-        td:nth-child(2), th:nth-child(2) { text-align: left; }
-        h2 { margin-top: 2rem; }
-        .empty { color: #888; font-style: italic; }
-        .data-bar { background: #f0f4f8; border: 1px solid #d0d7de; padding: 0.5rem 1rem; margin-bottom: 1rem; border-radius: 4px; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
-        .data-bar button { padding: 0.3rem 0.8rem; cursor: pointer; }
-        .pv-top50 { background: #e8e8e8; }
-        th.sortable { cursor: pointer; user-select: none; }
-        th.sortable:hover { background: #dde; }
-        th.sort-asc::after { content: " ▲"; }
-        th.sort-desc::after { content: " ▼"; }
+:root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --text: #f1f5f9; --muted: #94a3b8; --accent: #3b82f6;
+    --green: #22c55e; --red: #ef4444; --border: #475569;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0.75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; }
+.header h1 { font-size: 1.25rem; font-weight: 600; }
+.header-right { display: flex; align-items: center; gap: 1rem; font-size: 0.85rem; color: var(--muted); }
+.refresh-btn { background: var(--accent); color: white; border: none; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+.refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.9rem; }
+#refresh-status { color: var(--muted); font-size: 0.85rem; }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+.card-label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+.card-value { font-size: 1.75rem; font-weight: 700; }
+.card-sub { font-size: 0.85rem; margin-top: 0.25rem; color: var(--muted); }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+
+.chart-area { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+.chart-container { position: relative; height: 300px; }
+.range-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
+.range-pill { padding: 0.3rem 0.75rem; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; font-size: 0.8rem; background: transparent; }
+.range-pill:hover { border-color: var(--accent); color: var(--text); }
+.range-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+#range-label { font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
+#range-slider { width: 100%; margin-bottom: 0.5rem; }
+
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 0; overflow-x: auto; }
+.tab { padding: 0.75rem 1.25rem; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -2px; white-space: nowrap; font-size: 0.9rem; background: none; border-top: none; border-left: none; border-right: none; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.tab-panel { display: none; max-height: calc(100vh - 380px); overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 12px 12px; }
+.tab-panel.active { display: block; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; table-layout: auto; }
+thead th { position: sticky; top: 0; z-index: 1; text-align: left; padding: 0.75rem; color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface2); border-bottom: 1px solid var(--border); }
+td { padding: 0.75rem; border-bottom: 1px solid var(--surface2); }
+tr:hover td { background: var(--surface2); }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th.sort-asc::after { content: " ▲"; }
+th.sort-desc::after { content: " ▼"; }
+.text-right { text-align: right; white-space: nowrap; }
+.text-left { text-align: left; white-space: nowrap; width: 1%; }
+td:first-child, thead th:first-child { position: sticky; left: 0; z-index: 2; background: var(--surface); }
+thead th:first-child { background: var(--surface2); z-index: 3; }
+td:nth-child(2), thead th:nth-child(2) { position: sticky; z-index: 2; background: var(--surface); }
+thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
+.pv-top50 td { background: rgba(59,130,246,0.08); }
+
+@media (max-width: 640px) {
+    .header { padding: 0.75rem 1rem; }
+    .header h1 { font-size: 1.1rem; }
+    .container { padding: 1rem; }
+    .cards { grid-template-columns: 1fr; }
+    .card-value { font-size: 1.4rem; }
+    table { font-size: 0.8rem; }
+    th, td { padding: 0.5rem 0.4rem; }
+    .tab { padding: 0.6rem 0.9rem; font-size: 0.8rem; }
+    .tab-panel { max-height: calc(100vh - 340px); }
+    .chart-area { padding: 1rem; }
+    .chart-container { height: 250px; }
+}
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <h1>Simple Portfolio Tracker</h1>
 
-    <div class="data-bar">
-        <span id="freshness">{% if last_updated %}Prices as of market close {{ last_updated }}{% else %}Price data has not been refreshed yet{% endif %}</span>
-        {% if needs_refresh or not last_updated %}
-        <button id="refresh-btn" onclick="refreshData()">🔄 Refresh</button>
+<div class="header">
+    <h1>📊 Simple Portfolio</h1>
+    <div class="header-right">
+        {% if portfolios %}
+        <form method="get" id="portfolio-form" style="margin:0;">
+            <select name="portfolio" onchange="this.form.submit()">
+                {% for pid, pname in portfolios %}
+                <option value="{{ pid }}" {% if pid == portfolio_id %}selected{% endif %}>{{ pname }}</option>
+                {% endfor %}
+            </select>
+        </form>
         {% endif %}
-        <span id="refresh-status" style="color:#666;"></span>
+        <span id="freshness">{% if last_updated %}{{ last_updated }}{% else %}Not refreshed yet{% endif %}</span>
+        <button class="refresh-btn" id="refresh-btn" onclick="refreshData()">🔄 Refresh</button>
+        <span id="refresh-status"></span>
+    </div>
+</div>
+
+<div class="container">
+    {% set main_total = portfolio_value + portfolio_divs %}
+    {% set main_gain = main_total - portfolio_invested %}
+    {% set main_pct = (main_gain / portfolio_invested * 100) if portfolio_invested > 0 else 0 %}
+    {% set voo_total = voo_value + voo_divs %}
+    {% set qqq_total = qqq_value + qqq_divs %}
+
+    <div class="cards">
+        <div class="card">
+            <div class="card-label">Your Portfolio</div>
+            <div class="card-value">${{ "{:,.0f}".format(main_total) }}</div>
+            <div class="card-sub">Invested ${{ "{:,.0f}".format(portfolio_invested) }} · Dividends ${{ "{:,.2f}".format(portfolio_divs) }}</div>
+            <div class="card-sub {{ 'positive' if main_gain >= 0 else 'negative' }}">{{ "{:+,.2f}".format(main_gain) }}</div>
+        </div>
+        <div class="card">
+            <div class="card-label">vs VOO (S&P 500)</div>
+            <div class="card-value">${{ "{:,.0f}".format(voo_total) }}</div>
+            <div class="card-sub">Invested ${{ "{:,.0f}".format(voo_invested) }} · Dividends ${{ "{:,.2f}".format(voo_divs) }}</div>
+            {% set diff_voo = main_total - voo_total %}
+            <div class="card-sub {{ 'positive' if diff_voo >= 0 else 'negative' }}">{{ "Ahead" if diff_voo >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_voo|abs) }}</div>
+        </div>
+        <div class="card">
+            <div class="card-label">vs QQQ (NASDAQ)</div>
+            <div class="card-value">${{ "{:,.0f}".format(qqq_total) }}</div>
+            <div class="card-sub">Invested ${{ "{:,.0f}".format(qqq_invested) }} · Dividends ${{ "{:,.2f}".format(qqq_divs) }}</div>
+            {% set diff_qqq = main_total - qqq_total %}
+            <div class="card-sub {{ 'positive' if diff_qqq >= 0 else 'negative' }}">{{ "Ahead" if diff_qqq >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_qqq|abs) }}</div>
+        </div>
     </div>
 
-    {% if portfolios %}
-    <form method="get" style="margin-bottom: 1.5rem;">
-        <label for="portfolio"><strong>Portfolio:</strong></label>
-        <select name="portfolio" id="portfolio" onchange="this.form.submit()" style="padding: 0.3rem; font-size: 1rem;">
-            {% for pid, pname in portfolios %}
-            <option value="{{ pid }}" {% if pid == portfolio_id %}selected{% endif %}>{{ pname }}</option>
-            {% endfor %}
-        </select>
-    </form>
+    {% if history %}
+    <div class="chart-area">
+        <div class="range-bar">
+            <button class="range-pill" data-range="ytd" onclick="setRange('ytd')">YTD</button>
+            <button class="range-pill" data-range="1y" onclick="setRange('1y')">1Y</button>
+            <button class="range-pill" data-range="3y" onclick="setRange('3y')">3Y</button>
+            <button class="range-pill" data-range="5y" onclick="setRange('5y')">5Y</button>
+            <button class="range-pill" data-range="all" onclick="setRange('all')">All</button>
+            <span id="range-label"></span>
+        </div>
+        <input type="range" id="range-slider" min="0" max="100" value="0">
+        <div class="chart-container">
+            <canvas id="historyChart"></canvas>
+        </div>
+    </div>
     {% endif %}
 
-    <table>
-        <thead>
-            <tr><th style="text-align:left"></th><th>Total Invested</th><th>Current Value</th><th>Dividends</th><th>Difference</th></tr>
-        </thead>
-        {% set main_total = portfolio_value + portfolio_divs %}
-        <tbody>
-            <tr><td style="text-align:left">Main Portfolio</td><td>${{ "{:,.2f}".format(portfolio_invested) }}</td><td>${{ "{:,.2f}".format(portfolio_value) }}</td><td>${{ "{:,.2f}".format(portfolio_divs) }}</td><td>—</td></tr>
-            <tr><td style="text-align:left">Shadow — VOO (S&amp;P 500)</td><td>${{ "{:,.2f}".format(voo_invested) }}</td><td>${{ "{:,.2f}".format(voo_value) }}</td><td>${{ "{:,.2f}".format(voo_divs) }}</td><td>${{ "{:,.2f}".format(main_total - (voo_value + voo_divs)) }}</td></tr>
-            <tr><td style="text-align:left">Shadow — QQQ (NASDAQ)</td><td>${{ "{:,.2f}".format(qqq_invested) }}</td><td>${{ "{:,.2f}".format(qqq_value) }}</td><td>${{ "{:,.2f}".format(qqq_divs) }}</td><td>${{ "{:,.2f}".format(main_total - (qqq_value + qqq_divs)) }}</td></tr>
-        </tbody>
-    </table>
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('holdings', this)">Holdings</button>
+        <button class="tab" onclick="showTab('transactions', this)">Transactions</button>
+        <button class="tab" onclick="showTab('history-table', this)">Daily Values</button>
+        <button class="tab" onclick="showTab('shadow-voo', this)">Shadow VOO</button>
+        <button class="tab" onclick="showTab('shadow-qqq', this)">Shadow QQQ</button>
+    </div>
 
     {% if portfolio_summary %}
-    <h2>Portfolio View</h2>
-    <table id="pv-table">
-        <thead>
-            <tr>
-                <th class="sortable" data-col="TICKER" data-type="str">Ticker</th>
-                <th class="sortable" data-col="SHARES_OWNED" data-type="num">Shares Owned</th>
-                <th class="sortable" data-col="COST_BASIS" data-type="num">Cost Basis</th>
-                <th class="sortable" data-col="CURRENT_VALUE" data-type="num">Current Value</th>
-                <th class="sortable" data-col="DIVIDENDS" data-type="num">Dividends</th>
-                <th class="sortable" data-col="GAIN_LOSS" data-type="num">Gain/Loss</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-    <script>
-    (function() {
-        var data = {{ portfolio_summary|tojson }};
-        var table = document.getElementById("pv-table");
-        var tbody = table.querySelector("tbody");
-        var headers = table.querySelectorAll("th.sortable");
-        var currentSort = {col: null, dir: null};
-
-        function render() {
-            tbody.innerHTML = "";
-            var total = data.reduce(function(s, r) { return s + r.CURRENT_VALUE; }, 0);
-            var cumul = 0;
-            var byValue = data.slice().sort(function(a, b) { return b.CURRENT_VALUE - a.CURRENT_VALUE; });
-            var top50 = {};
-            for (var i = 0; i < byValue.length; i++) {
-                cumul += byValue[i].CURRENT_VALUE;
-                top50[byValue[i].TICKER] = true;
-                if (cumul >= total * 0.5) break;
-            }
-            var showShade = (currentSort.col === "CURRENT_VALUE");
-            for (var j = 0; j < data.length; j++) {
-                var r = data[j];
-                var tr = document.createElement("tr");
-                if (showShade && top50[r.TICKER]) tr.className = "pv-top50";
-                tr.innerHTML = "<td style='text-align:left'>" + r.TICKER + "</td>"
-                    + "<td>" + r.SHARES_OWNED.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
-                    + "<td>$" + r.COST_BASIS.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
-                    + "<td>$" + r.CURRENT_VALUE.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
-                    + "<td>$" + r.DIVIDENDS.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>"
-                    + "<td style='color:" + (r.GAIN_LOSS >= 0 ? "green" : "red") + "'>$" + r.GAIN_LOSS.toLocaleString(undefined, {minimumFractionDigits: 2}) + "</td>";
-                tbody.appendChild(tr);
-            }
-        }
-
-        function sortBy(col, type, forceDir) {
-            var dir;
-            if (forceDir) {
-                dir = forceDir;
-            } else if (currentSort.col === col && currentSort.dir === "desc") {
-                dir = "asc";
-            } else {
-                dir = "desc";
-            }
-            currentSort = {col: col, dir: dir};
-            data.sort(function(a, b) {
-                var va = a[col], vb = b[col];
-                if (type === "str") { va = va.toLowerCase(); vb = vb.toLowerCase(); }
-                if (dir === "asc") return va < vb ? -1 : va > vb ? 1 : 0;
-                return va > vb ? -1 : va < vb ? 1 : 0;
-            });
-            headers.forEach(function(h) { h.classList.remove("sort-asc", "sort-desc"); });
-            document.querySelector('[data-col="' + col + '"]').classList.add("sort-" + dir);
-            render();
-        }
-
-        headers.forEach(function(h) {
-            h.addEventListener("click", function() { sortBy(h.dataset.col, h.dataset.type); });
-        });
-
-        sortBy("CURRENT_VALUE", "num", "desc");
-    })();
-    </script>
+    <div id="holdings" class="tab-panel active">
+        <table id="pv-table">
+            <thead>
+                <tr>
+                    <th class="sortable text-left" data-col="TICKER" data-type="str">Ticker</th>
+                    <th class="sortable text-right" data-col="SHARES_OWNED" data-type="num">Shares</th>
+                    <th class="sortable text-right" data-col="COST_BASIS" data-type="num">Cost Basis</th>
+                    <th class="sortable text-right" data-col="CURRENT_VALUE" data-type="num">Value</th>
+                    <th class="sortable text-right" data-col="DIVIDENDS" data-type="num">Dividends</th>
+                    <th class="sortable text-right" data-col="GAIN_LOSS" data-type="num">Gain/Loss</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    {% else %}
+    <div id="holdings" class="tab-panel active" style="padding:2rem; text-align:center; color:var(--muted);">No holdings data yet. Click Refresh to load prices.</div>
     {% endif %}
 
-    {% if history %}
-    <canvas id="historyChart" style="max-height:400px; margin-bottom:2rem;"></canvas>
-    <script>
-    new Chart(document.getElementById("historyChart"), {
+    <div id="transactions" class="tab-panel">
+        {% macro render_txn_table(title, rows, columns, show_title) %}
+        {% if rows %}
+        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends", "TOTAL_RETURN": "Total Return", "IRR": "IRR", "VS_VOO": "vs VOO", "VS_QQQ": "vs QQQ"} %}
+        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "VS_VOO", "VS_QQQ"] %}
+        {% set pct_cols = ["IRR"] %}
+        <table class="auto-sort">
+            <thead>
+                {% if show_title %}<tr><th class="text-left" colspan="{{ columns|length }}" style="font-size:0.9rem; text-transform:none; letter-spacing:normal; padding:1rem 0.75rem;">{{ title }}</th></tr>{% endif %}
+                <tr>{% for col in columns %}<th class="sortable {{ 'text-left' if loop.index <= 2 else 'text-right' }}">{{ col_labels.get(col, col) }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>{% for col in columns %}<td class="{{ 'text-left' if loop.index <= 2 else 'text-right' }}{% if col in dollar_cols and row[col] is not none %} {{ 'positive' if row[col]|float >= 0 else 'negative' }}{% endif %}{% if col in pct_cols and row[col] is not none %} {{ 'positive' if row[col]|float >= 0 else 'negative' }}{% endif %}">{% if row[col] is none %}—{% elif col in dollar_cols %}${{ "{:,.2f}".format(row[col]|float) }}{% elif col in pct_cols %}{{ "{:.1f}".format(row[col]|float) }}%{% elif col == "SHARES_PURCHASED" or col == "CURRENT_SHARES" %}{{ "{:,.2f}".format(row[col]|float) }}{% else %}{{ row[col] }}{% endif %}</td>{% endfor %}</tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        {% endmacro %}
+        {{ render_txn_table("Main Portfolio", portfolio, columns, false) }}
+    </div>
+
+    <div id="shadow-voo" class="tab-panel">
+        {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, shadow_columns, false) }}
+    </div>
+
+    <div id="shadow-qqq" class="tab-panel">
+        {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, shadow_columns, false) }}
+    </div>
+
+    <div id="history-table" class="tab-panel">
+        {% if history %}
+        <table class="auto-sort">
+            <thead><tr><th class="sortable text-left">Date</th><th class="sortable text-right">Portfolio</th><th class="sortable text-right">VOO</th><th class="sortable text-right">QQQ</th></tr></thead>
+            <tbody>
+                {% for row in history %}
+                <tr><td class="text-left">{{ row.DATE }}</td><td class="text-right">${{ "{:,.2f}".format(row.MAIN) }}</td><td class="text-right">${{ "{:,.2f}".format(row.VOO) }}</td><td class="text-right">${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function showTab(id, btn) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    btn.classList.add('active');
+}
+
+{% if portfolio_summary %}
+(function() {
+    var data = {{ portfolio_summary|tojson }};
+    var table = document.getElementById("pv-table");
+    var tbody = table.querySelector("tbody");
+    var headers = table.querySelectorAll("th.sortable");
+    var currentSort = {col: null, dir: null};
+
+    function render() {
+        tbody.innerHTML = "";
+        var total = data.reduce(function(s, r) { return s + r.CURRENT_VALUE; }, 0);
+        var cumul = 0;
+        var byValue = data.slice().sort(function(a, b) { return b.CURRENT_VALUE - a.CURRENT_VALUE; });
+        var top50 = {};
+        for (var i = 0; i < byValue.length; i++) {
+            cumul += byValue[i].CURRENT_VALUE;
+            top50[byValue[i].TICKER] = true;
+            if (cumul >= total * 0.5) break;
+        }
+        var showShade = (currentSort.col === "CURRENT_VALUE");
+        for (var j = 0; j < data.length; j++) {
+            var r = data[j];
+            var tr = document.createElement("tr");
+            if (showShade && top50[r.TICKER]) tr.className = "pv-top50";
+            var glColor = r.GAIN_LOSS >= 0 ? "var(--green)" : "var(--red)";
+            tr.innerHTML = '<td class="text-left">' + r.TICKER + '</td>'
+                + '<td class="text-right">' + r.SHARES_OWNED.toLocaleString(undefined, {minimumFractionDigits: 2}) + '</td>'
+                + '<td class="text-right">$' + r.COST_BASIS.toLocaleString(undefined, {minimumFractionDigits: 2}) + '</td>'
+                + '<td class="text-right">$' + r.CURRENT_VALUE.toLocaleString(undefined, {minimumFractionDigits: 2}) + '</td>'
+                + '<td class="text-right">$' + r.DIVIDENDS.toLocaleString(undefined, {minimumFractionDigits: 2}) + '</td>'
+                + '<td class="text-right" style="color:' + glColor + '">$' + r.GAIN_LOSS.toLocaleString(undefined, {minimumFractionDigits: 2}) + '</td>';
+            tbody.appendChild(tr);
+        }
+    }
+
+    function sortBy(col, type, forceDir) {
+        var dir = forceDir || (currentSort.col === col && currentSort.dir === "desc" ? "asc" : "desc");
+        currentSort = {col: col, dir: dir};
+        data.sort(function(a, b) {
+            var va = a[col], vb = b[col];
+            if (type === "str") { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+            return dir === "asc" ? (va < vb ? -1 : va > vb ? 1 : 0) : (va > vb ? -1 : va < vb ? 1 : 0);
+        });
+        headers.forEach(function(h) { h.classList.remove("sort-asc", "sort-desc"); });
+        document.querySelector('[data-col="' + col + '"]').classList.add("sort-" + dir);
+        render();
+    }
+
+    headers.forEach(function(h) {
+        h.addEventListener("click", function() { sortBy(h.dataset.col, h.dataset.type); });
+    });
+    sortBy("CURRENT_VALUE", "num", "desc");
+})();
+{% endif %}
+
+{% if history %}
+(function() {
+    var allDates = {{ history|map(attribute='DATE')|list|tojson }};
+    var allMain = {{ history|map(attribute='MAIN')|list|tojson }};
+    var allVoo = {{ history|map(attribute='VOO')|list|tojson }};
+    var allQqq = {{ history|map(attribute='QQQ')|list|tojson }};
+    var chart = new Chart(document.getElementById("historyChart"), {
         type: "line",
         data: {
-            labels: {{ history|map(attribute='DATE')|list|tojson }},
+            labels: allDates,
             datasets: [
-                {label: "Main Portfolio", data: {{ history|map(attribute='MAIN')|list|tojson }}, borderColor: "#2563eb", borderWidth: 2, pointRadius: 0, fill: false},
-                {label: "VOO (S&P 500)", data: {{ history|map(attribute='VOO')|list|tojson }}, borderColor: "#16a34a", borderWidth: 2, pointRadius: 0, fill: false},
-                {label: "QQQ (NASDAQ)", data: {{ history|map(attribute='QQQ')|list|tojson }}, borderColor: "#dc2626", borderWidth: 2, pointRadius: 0, fill: false}
+                {label: "Portfolio", data: allMain, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, fill: false},
+                {label: "VOO", data: allVoo, borderColor: "#22c55e", borderWidth: 2, pointRadius: 0, fill: false},
+                {label: "QQQ", data: allQqq, borderColor: "#ef4444", borderWidth: 2, pointRadius: 0, fill: false}
             ]
         },
         options: {
-            responsive: true,
+            responsive: true, maintainAspectRatio: false, animation: false,
             scales: {
-                x: {ticks: {maxTicksLimit: 12}},
-                y: {ticks: {callback: v => "$" + v.toLocaleString()}}
+                x: {ticks: {maxTicksLimit: 10, color: "#94a3b8"}, grid: {color: "#334155"}},
+                y: {ticks: {callback: function(v) { return "$" + v.toLocaleString(); }, color: "#94a3b8"}, grid: {color: "#334155"}}
             },
             plugins: {
-                tooltip: {callbacks: {label: ctx => ctx.dataset.label + ": $" + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2})}}
+                legend: {labels: {color: "#f1f5f9"}},
+                tooltip: {callbacks: {label: function(ctx) { return ctx.dataset.label + ": $" + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2}); }}}
             }
         }
     });
-    </script>
-    {% endif %}
 
-    {% macro render_table(title, rows, columns, current_value, total_divs) %}
-    <h2>{{ title }}{% if rows %}: Total Invested ${{ "{:,.2f}".format(rows|sum(attribute='TOTAL_VALUE')) }} | Current Value ${{ "{:,.2f}".format(current_value) }} | Dividends ${{ "{:,.2f}".format(total_divs) }}{% endif %}</h2>
-    {% if rows %}
-    <table>
-        <thead>
-            <tr>
-                {% for col in columns %}<th>{{ col }}</th>{% endfor %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in rows %}
-            <tr>
-                {% for col in columns %}<td>{{ row[col] }}</td>{% endfor %}
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="empty">No transactions yet.</p>
-    {% endif %}
-    {% endmacro %}
+    var slider = document.getElementById("range-slider");
+    var label = document.getElementById("range-label");
 
-    {{ render_table("Main Portfolio", portfolio, columns, portfolio_value, portfolio_divs) }}
-    {{ render_table("Shadow Portfolio — VOO (S&P 500)", shadow_voo, columns, voo_value, voo_divs) }}
-    {{ render_table("Shadow Portfolio — QQQ (NASDAQ)", shadow_qqq, columns, qqq_value, qqq_divs) }}
-
-    {% if history %}
-    <h2>Daily Portfolio Value (Share Value + Dividends)</h2>
-    <table>
-        <thead>
-            <tr><th>Date</th><th>Main Portfolio</th><th>VOO</th><th>QQQ</th></tr>
-        </thead>
-        <tbody>
-            {% for row in history %}
-            <tr><td>{{ row.DATE }}</td><td>${{ "{:,.2f}".format(row.MAIN) }}</td><td>${{ "{:,.2f}".format(row.VOO) }}</td><td>${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% endif %}
-    <script>
-    function refreshData() {
-        var btn = document.getElementById("refresh-btn");
-        var status = document.getElementById("refresh-status");
-        btn.disabled = true;
-        status.textContent = "Refreshing… this may take a minute.";
-        fetch("/refresh?portfolio={{ portfolio_id }}")
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.status === "ok") {
-                    status.textContent = "Done! Reloading…";
-                    setTimeout(function() { location.reload(); }, 500);
-                } else if (data.status === "incomplete") {
-                    status.textContent = "Updated, but failed: " + (data.failed_tickers || []).join(", ");
-                    btn.disabled = false;
-                } else if (data.status === "error") {
-                    status.textContent = "Error: " + data.message;
-                    btn.disabled = false;
-                }
-            })
-            .catch(function(e) {
-                status.textContent = "Error: " + e;
-                btn.disabled = false;
-            });
+    function updateChart(startIdx) {
+        chart.data.labels = allDates.slice(startIdx);
+        chart.data.datasets[0].data = allMain.slice(startIdx);
+        chart.data.datasets[1].data = allVoo.slice(startIdx);
+        chart.data.datasets[2].data = allQqq.slice(startIdx);
+        chart.update();
+        var d = chart.data.labels;
+        label.textContent = d[0] + " — " + d[d.length-1] + " (" + d.length + " days)";
     }
-    </script>
+
+    function findDateIdx(target) {
+        for (var i = 0; i < allDates.length; i++) { if (allDates[i] >= target) return i; }
+        return 0;
+    }
+
+    window.setRange = function(range) {
+        document.querySelectorAll(".range-pill").forEach(function(b) { b.classList.remove("active"); });
+        document.querySelector('[data-range="'+range+'"]').classList.add("active");
+        var now = new Date(), y = now.getFullYear(), m = now.getMonth()+1, d = now.getDate();
+        var pad = function(n) { return n < 10 ? "0"+n : ""+n; };
+        var idx = 0;
+        if (range === "ytd") idx = findDateIdx(y + "-01-01");
+        else if (range === "1y") idx = findDateIdx((y-1)+"-"+pad(m)+"-"+pad(d));
+        else if (range === "3y") idx = findDateIdx((y-3)+"-"+pad(m)+"-"+pad(d));
+        else if (range === "5y") idx = findDateIdx((y-5)+"-"+pad(m)+"-"+pad(d));
+        slider.value = idx; slider.max = allDates.length - 1;
+        updateChart(idx);
+    };
+
+    slider.max = allDates.length - 1;
+    slider.addEventListener("input", function() {
+        document.querySelectorAll(".range-pill").forEach(function(b) { b.classList.remove("active"); });
+        updateChart(parseInt(slider.value));
+    });
+    setRange("all");
+})();
+{% endif %}
+
+// Sticky column offsets: pin first two columns
+document.querySelectorAll(".tab-panel table").forEach(function(table) {
+    var firstTh = table.querySelector("thead tr:last-child th:first-child");
+    if (firstTh) {
+        var w = firstTh.offsetWidth;
+        table.querySelectorAll("td:nth-child(2), thead th:nth-child(2)").forEach(function(el) {
+            el.style.left = w + "px";
+        });
+    }
+});
+
+// Generic sortable tables
+document.querySelectorAll("table.auto-sort").forEach(function(table) {
+    var headers = table.querySelectorAll("th.sortable");
+    var sortState = {col: -1, dir: null};
+    headers.forEach(function(th, colIdx) {
+        th.addEventListener("click", function() {
+            var tbody = table.querySelector("tbody");
+            var rows = Array.from(tbody.querySelectorAll("tr"));
+            var dir = (sortState.col === colIdx && sortState.dir === "desc") ? "asc" : "desc";
+            sortState = {col: colIdx, dir: dir};
+            rows.sort(function(a, b) {
+                var at = a.cells[colIdx].textContent.trim();
+                var bt = b.cells[colIdx].textContent.trim();
+                var an = parseFloat(at.replace(/[$,%]/g, ""));
+                var bn = parseFloat(bt.replace(/[$,%]/g, ""));
+                if (!isNaN(an) && !isNaN(bn)) { at = an; bt = bn; }
+                if (dir === "asc") return at < bt ? -1 : at > bt ? 1 : 0;
+                return at > bt ? -1 : at < bt ? 1 : 0;
+            });
+            rows.forEach(function(r) { tbody.appendChild(r); });
+            headers.forEach(function(h) { h.classList.remove("sort-asc", "sort-desc"); });
+            th.classList.add("sort-" + dir);
+        });
+    });
+});
+
+function refreshData() {
+    var btn = document.getElementById("refresh-btn");
+    var status = document.getElementById("refresh-status");
+    btn.disabled = true;
+    status.textContent = "Refreshing…";
+    fetch("/refresh?portfolio={{ portfolio_id }}")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === "ok") { status.textContent = "Done!"; setTimeout(function() { location.reload(); }, 500); }
+            else if (data.status === "incomplete") { status.textContent = "Partial: " + (data.failed_tickers||[]).join(", "); btn.disabled = false; }
+            else { status.textContent = "Error: " + data.message; btn.disabled = false; }
+        })
+        .catch(function(e) { status.textContent = "Error: " + e; btn.disabled = false; });
+}
+</script>
 </body>
 </html>

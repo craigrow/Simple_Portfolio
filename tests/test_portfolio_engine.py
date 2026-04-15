@@ -37,6 +37,7 @@ def setup_teardown(tmp_path):
         "price_history": str(data_dir / "price_history.csv"),
         "config": str(test_portfolio / "config.json"),
         "last_updated": str(data_dir / "last_updated.txt"),
+        "daily_values": str(data_dir / "daily_values.csv"),
     }
 
     with open(portfolio_engine._test_paths["transactions"], "w", newline="") as f:
@@ -615,3 +616,166 @@ class TestRefreshDataErrorHandling:
                         result = portfolio_engine.refresh_data(_paths())
         assert result["status"] == "incomplete"
         assert "X" in result["failed_tickers"]
+
+
+class TestVectorizedPortfolioValues:
+    def test_empty_portfolio(self):
+        prices = pd.DataFrame({"AAPL": [100.0]}, index=pd.date_range("2025-01-02", periods=1))
+        result = portfolio_engine._vectorized_portfolio_values(
+            pd.DataFrame(), pd.DataFrame(columns=["TICKER", "DATE", "RATIO"]),
+            pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"]), prices)
+        assert (result == 0.0).all()
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_single_holding(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        dates = pd.date_range("2025-01-02", periods=3)
+        prices = pd.DataFrame({"MSFT": [100.0, 105.0, 110.0]}, index=dates)
+        splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        divs = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+        result = portfolio_engine._vectorized_portfolio_values(port_df, splits, divs, prices)
+        assert result.iloc[0] == 1000.0  # 10 shares × $100
+        assert result.iloc[2] == 1100.0  # 10 shares × $110
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_holding_before_purchase_is_zero(self, mock_price):
+        _write_transaction("2025-01-03", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        dates = pd.date_range("2025-01-02", periods=3)
+        prices = pd.DataFrame({"MSFT": [100.0, 105.0, 110.0]}, index=dates)
+        splits = pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
+        divs = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+        result = portfolio_engine._vectorized_portfolio_values(port_df, splits, divs, prices)
+        assert result.iloc[0] == 0.0  # Before purchase
+        assert result.iloc[1] == 1050.0  # 10 × $105
+
+
+class TestComputeDailyValues:
+    def test_empty_portfolio_returns_empty(self):
+        result = portfolio_engine.compute_daily_values(_paths())
+        assert result == []
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_computes_and_caches(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        dates = pd.date_range("2025-01-02", periods=3)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0, 110.0],
+            "VOO": [500.0, 505.0, 510.0],
+            "QQQ": [400.0, 405.0, 410.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        result = portfolio_engine.compute_daily_values(_paths())
+        assert len(result) == 3
+        assert result[0]["MAIN"] == 1000.0
+        # Cache file should exist
+        assert os.path.exists(_paths()["daily_values"])
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_cache_hit_skips_recompute(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        dates = pd.date_range("2025-01-02", periods=2)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0], "VOO": [500.0, 505.0], "QQQ": [400.0, 405.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        r1 = portfolio_engine.compute_daily_values(_paths())
+        r2 = portfolio_engine.compute_daily_values(_paths())
+        assert len(r1) == len(r2)
+        assert r1[0]["MAIN"] == r2[0]["MAIN"]
+
+
+class TestGetCachedDailyValues:
+    def test_no_cache_returns_empty(self):
+        assert portfolio_engine.get_cached_daily_values(_paths()) == []
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_reads_existing_cache(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        dates = pd.date_range("2025-01-02", periods=2)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0], "VOO": [500.0, 505.0], "QQQ": [400.0, 405.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        portfolio_engine.compute_daily_values(_paths())
+        result = portfolio_engine.get_cached_daily_values(_paths())
+        assert len(result) == 2
+
+
+class TestComputeIrr:
+    def test_positive_return(self):
+        """A $100 investment now worth $121 after exactly 2 years = ~10% annualized."""
+        from datetime import datetime, timedelta
+        date_str = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
+        irr = portfolio_engine.compute_irr(100, 121, date_str)
+        assert irr is not None
+        assert 9.0 <= irr <= 11.0  # ~10% annualized
+
+    def test_negative_return(self):
+        from datetime import datetime, timedelta
+        date_str = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        irr = portfolio_engine.compute_irr(100, 80, date_str)
+        assert irr is not None
+        assert irr < 0
+
+    def test_zero_days_returns_none(self):
+        from datetime import datetime
+        irr = portfolio_engine.compute_irr(100, 110, datetime.now().strftime("%Y-%m-%d"))
+        assert irr is None
+
+    def test_zero_invested_returns_none(self):
+        irr = portfolio_engine.compute_irr(0, 100, "2020-01-01")
+        assert irr is None
+
+    def test_future_date_returns_none(self):
+        irr = portfolio_engine.compute_irr(100, 110, "2099-01-01")
+        assert irr is None
+
+
+class TestAddComparisonColumns:
+    def _make_df(self, tickers, values, returns):
+        return pd.DataFrame({
+            "DATE": ["2024-01-01"] * len(tickers),
+            "TICKER": tickers,
+            "TOTAL_VALUE": values,
+            "TOTAL_RETURN": returns,
+        })
+
+    def test_adds_all_columns(self):
+        main = self._make_df(["AAPL"], [100], [120])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        result = portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert "IRR" in result.columns
+        assert "VS_VOO" in result.columns
+        assert "VS_QQQ" in result.columns
+
+    def test_vs_voo_calculation(self):
+        main = self._make_df(["AAPL"], [100], [120])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        result = portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert result.iloc[0]["VS_VOO"] == 10.0  # 120 - 110
+        assert result.iloc[0]["VS_QQQ"] == 5.0   # 120 - 115
+
+    def test_mismatched_lengths(self):
+        main = self._make_df(["AAPL", "MSFT"], [100, 200], [120, 250])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        result = portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert result.iloc[0]["VS_VOO"] == 10.0
+        assert pd.isna(result.iloc[1]["VS_VOO"])
+
+    def test_does_not_mutate_input(self):
+        main = self._make_df(["AAPL"], [100], [120])
+        voo = self._make_df(["VOO"], [100], [110])
+        qqq = self._make_df(["QQQ"], [100], [115])
+        original_cols = list(main.columns)
+        portfolio_engine.add_comparison_columns(main, voo, qqq)
+        assert list(main.columns) == original_cols

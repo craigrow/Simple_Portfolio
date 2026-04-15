@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Option C — Compact with Collapsible Sections</title>
+<style>
+:root {
+    --bg: #fafaf9; --surface: #ffffff; --text: #1c1917; --muted: #78716c;
+    --accent: #0d9488; --accent-light: #ccfbf1; --green: #16a34a; --red: #dc2626;
+    --border: #e7e5e4; --warm: #fef3c7;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+
+.header { background: linear-gradient(135deg, #134e4a, #0d9488); color: white; padding: 1.25rem 1.5rem; }
+.header-inner { max-width: 960px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; }
+.header h1 { font-size: 1.2rem; font-weight: 600; }
+.header-controls { display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; }
+.header select { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 0.35rem 0.6rem; border-radius: 6px; }
+.header select option { color: #1c1917; }
+.refresh-btn { background: white; color: #134e4a; border: none; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85rem; }
+.freshness { opacity: 0.85; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+
+/* Benchmark bar */
+.bench { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1.5rem; }
+.bench-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; text-align: center; }
+.bench-card.main { border-left: 4px solid var(--accent); }
+.bench-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; }
+.bench-value { font-size: 1.6rem; font-weight: 700; margin: 0.25rem 0; }
+.bench-diff { font-size: 0.85rem; font-weight: 500; }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+
+/* Collapsible sections */
+.section-header { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 0.5rem; cursor: pointer; user-select: none; }
+.section-header h2 { font-size: 1rem; font-weight: 600; }
+.section-header .toggle { font-size: 1.2rem; color: var(--muted); transition: transform 0.2s; }
+.section-header.open .toggle { transform: rotate(180deg); }
+.section-body { display: none; margin-bottom: 1.5rem; }
+.section-body.open { display: block; }
+
+/* Chart */
+.chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 0 0 10px 10px; padding: 1.25rem; margin-top: -0.5rem; margin-bottom: 1.5rem; }
+.range-bar { display: flex; gap: 0.4rem; margin-bottom: 1rem; }
+.range-pill { padding: 0.25rem 0.7rem; border-radius: 20px; border: 1px solid var(--border); font-size: 0.8rem; cursor: pointer; color: var(--muted); }
+.range-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+.chart-placeholder { height: 220px; background: linear-gradient(135deg, #f0fdfa, #e7e5e4); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 0 0 10px 10px; overflow: hidden; margin-top: -0.5rem; margin-bottom: 1.5rem; }
+th { text-align: left; padding: 0.6rem 0.75rem; font-size: 0.75rem; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+td { padding: 0.6rem 0.75rem; border-top: 1px solid var(--border); font-size: 0.9rem; }
+
+/* Mobile */
+@media (max-width: 640px) {
+    .bench { grid-template-columns: 1fr; }
+    .bench-value { font-size: 1.3rem; }
+    .header-inner { flex-direction: column; align-items: flex-start; }
+    th, td { padding: 0.4rem 0.5rem; font-size: 0.8rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-inner">
+        <h1>📊 Simple Portfolio</h1>
+        <div class="header-controls">
+            <select><option>TQQQ Portfolio</option></select>
+            <span class="freshness">Apr 10 close</span>
+            <button class="refresh-btn">🔄 Refresh</button>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="bench">
+        <div class="bench-card main">
+            <div class="bench-label">Your Portfolio</div>
+            <div class="bench-value">$47,832</div>
+            <div class="bench-diff positive">+$5,644 (+13.3%)</div>
+        </div>
+        <div class="bench-card">
+            <div class="bench-label">vs S&P 500</div>
+            <div class="bench-value">$46,219</div>
+            <div class="bench-diff positive">Ahead $723</div>
+        </div>
+        <div class="bench-card">
+            <div class="bench-label">vs NASDAQ</div>
+            <div class="bench-value">$48,105</div>
+            <div class="bench-diff negative">Behind $586</div>
+        </div>
+    </div>
+
+    <div class="section-header open" onclick="toggleSection(this)">
+        <h2>📈 Performance Chart</h2>
+        <span class="toggle">▼</span>
+    </div>
+    <div class="section-body open">
+        <div class="chart-wrap">
+            <div class="range-bar">
+                <span class="range-pill">YTD</span>
+                <span class="range-pill active">1Y</span>
+                <span class="range-pill">3Y</span>
+                <span class="range-pill">5Y</span>
+                <span class="range-pill">All</span>
+            </div>
+            <div class="chart-placeholder">📈 Chart renders here</div>
+        </div>
+    </div>
+
+    <div class="section-header" onclick="toggleSection(this)">
+        <h2>💼 Holdings (12 positions)</h2>
+        <span class="toggle">▼</span>
+    </div>
+    <div class="section-body">
+        <table>
+            <thead><tr><th>Ticker</th><th>Shares</th><th>Cost</th><th>Value</th><th>Gain/Loss</th></tr></thead>
+            <tbody>
+                <tr><td>TQQQ</td><td>150</td><td>$12,450</td><td>$14,220</td><td class="positive">+$1,770</td></tr>
+                <tr><td>AAPL</td><td>25</td><td>$4,375</td><td>$5,100</td><td class="positive">+$725</td></tr>
+                <tr><td>PRYMY</td><td>200</td><td>$3,200</td><td>$2,880</td><td class="negative">-$320</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="section-header" onclick="toggleSection(this)">
+        <h2>📋 Transactions</h2>
+        <span class="toggle">▼</span>
+    </div>
+    <div class="section-body">
+        <table>
+            <thead><tr><th>Date</th><th>Ticker</th><th>Price</th><th>Shares</th><th>Total</th></tr></thead>
+            <tbody>
+                <tr><td>2026-04-07</td><td>EMBJ</td><td>$24.50</td><td>100</td><td>$2,450</td></tr>
+                <tr><td>2026-03-31</td><td>PRYMY</td><td>$16.00</td><td>200</td><td>$3,200</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="section-header" onclick="toggleSection(this)">
+        <h2>📅 Daily Values</h2>
+        <span class="toggle">▼</span>
+    </div>
+    <div class="section-body">
+        <table>
+            <thead><tr><th>Date</th><th>Portfolio</th><th>VOO</th><th>QQQ</th></tr></thead>
+            <tbody>
+                <tr><td>2026-04-10</td><td>$47,832</td><td>$46,219</td><td>$48,105</td></tr>
+                <tr><td>2026-04-09</td><td>$47,510</td><td>$46,050</td><td>$47,890</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function toggleSection(header) {
+    header.classList.toggle('open');
+    header.nextElementSibling.classList.toggle('open');
+}
+</script>
+</body>
+</html>

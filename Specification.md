@@ -377,6 +377,9 @@ As a user, I want to see a portfolio view. The portfolio view is a table with th
     1. The table should be sortable by clicking on any column heading. 
     2. The default sort is Current Value.
     3. When sorted by Current Value, the stocks which make up 50% of the value of the portfolio shall have their rows shaded in grey so that the investor can easily see the largest stocks that make up half of their investment. 
+
+### User Story #9
+As a user, I want to know how my stocks are doing today, during market hours. 
 ---
 
 ### Backlog Stories
@@ -395,3 +398,28 @@ As a user, I want to see a portfolio view. The portfolio view is a table with th
 13. Create a portfolio view (group tickers from the transactions)
 14. Calculate and show the total porfolio gain.
 
+
+## Feature Roadmap
+
+Planned features in priority order (discussed 2026-04-11):
+
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| 1 | Per-transaction vs shadow performance | ✅ Done | vs VOO and vs QQQ columns on Transactions tab |
+| 2 | IRR (Internal Rate of Return) | 🟡 Partial | Per-transaction IRR on Transactions tab. Still needed: per-stock IRR on Holdings, per-portfolio IRR on summary cards |
+| 3 | Today vs market | Not started | Daily change ($, %) for portfolio, each stock, each transaction. Depends on intraday pricing work (staged, untested) |
+| 4 | Batting avg / slugging pct | Not started | % of transactions beating market, distribution of 1x/2x/3x returns. New "Metrics" tab. Depends on #1 |
+| 5 | CRUD controls | Not started | Add portfolios and transactions via UI. POST endpoints, form validation. Needs spec doc first |
+| 6 | Column show/hide | Not started | User toggle to show/hide columns per table, persist in localStorage |
+
+### Intraday Pricing (staged, not yet tested)
+- Branch: `staging` (uncommitted changes in `portfolio_engine.py`)
+- Adds `_is_market_open()`, live intraday price fetching, real timestamps
+- Needs testing during market hours (Mon-Fri 9:30 AM - 4 PM ET)
+
+### Design Decisions
+- Dark dashboard theme (Option A) chosen over light sidebar (B) and collapsible sections (C)
+- Mockups preserved in `mockups/` directory for reference
+- Simple return % removed from summary cards — will be replaced by IRR
+- Shadow portfolio transactions split into separate VOO/QQQ tabs
+- 5 tabs max before considering sidebar nav pattern

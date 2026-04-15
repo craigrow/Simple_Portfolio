@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Option B — Clean Light with Sidebar Nav</title>
+<style>
+:root {
+    --bg: #f8fafc; --surface: #ffffff; --text: #1e293b; --muted: #64748b;
+    --accent: #6366f1; --accent-light: #eef2ff; --green: #16a34a; --red: #dc2626;
+    --border: #e2e8f0;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+
+.layout { display: flex; min-height: 100vh; }
+
+/* Sidebar */
+.sidebar { width: 220px; background: var(--surface); border-right: 1px solid var(--border); padding: 1.5rem 0; flex-shrink: 0; }
+.sidebar h1 { font-size: 1.1rem; padding: 0 1.25rem; margin-bottom: 1.5rem; }
+.nav-item { display: block; padding: 0.6rem 1.25rem; color: var(--muted); cursor: pointer; font-size: 0.9rem; border-left: 3px solid transparent; }
+.nav-item:hover { background: var(--bg); color: var(--text); }
+.nav-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-light); font-weight: 600; }
+
+.main { flex: 1; padding: 1.5rem 2rem; overflow-x: hidden; }
+
+/* Top bar */
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem; }
+.topbar-left { display: flex; align-items: center; gap: 1rem; }
+select { padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem; }
+.freshness { font-size: 0.85rem; color: var(--muted); }
+.refresh-btn { background: var(--accent); color: white; border: none; padding: 0.5rem 1.25rem; border-radius: 8px; cursor: pointer; font-weight: 500; }
+
+/* Summary strip */
+.summary-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.metric { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; }
+.metric-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.metric-value { font-size: 1.5rem; font-weight: 700; margin: 0.25rem 0; }
+.metric-detail { font-size: 0.8rem; color: var(--muted); }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+
+/* Section */
+.section { display: none; }
+.section.active { display: block; }
+
+/* Chart */
+.chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; margin-bottom: 2rem; }
+.range-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.range-pill { padding: 0.3rem 0.8rem; border-radius: 20px; border: 1px solid var(--border); font-size: 0.8rem; cursor: pointer; color: var(--muted); }
+.range-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+.chart-placeholder { height: 250px; background: linear-gradient(135deg, #f1f5f9, #e2e8f0); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+th { text-align: left; padding: 0.75rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--border); }
+td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+tr:last-child td { border-bottom: none; }
+tr:hover { background: #f8fafc; }
+
+/* Mobile: collapse sidebar to top nav */
+@media (max-width: 768px) {
+    .layout { flex-direction: column; }
+    .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); padding: 0.75rem 0; display: flex; align-items: center; overflow-x: auto; }
+    .sidebar h1 { margin-bottom: 0; padding: 0 1rem; white-space: nowrap; font-size: 1rem; }
+    .nav-item { border-left: none; border-bottom: 3px solid transparent; padding: 0.5rem 1rem; white-space: nowrap; }
+    .nav-item.active { border-left: none; border-bottom-color: var(--accent); }
+    .main { padding: 1rem; }
+    .metric-value { font-size: 1.2rem; }
+    th, td { padding: 0.5rem; font-size: 0.8rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="layout">
+    <nav class="sidebar">
+        <h1>📊 Portfolio</h1>
+        <div class="nav-item active" onclick="showSection('overview', this)">Overview</div>
+        <div class="nav-item" onclick="showSection('holdings', this)">Holdings</div>
+        <div class="nav-item" onclick="showSection('transactions', this)">Transactions</div>
+        <div class="nav-item" onclick="showSection('history', this)">Daily Values</div>
+    </nav>
+
+    <div class="main">
+        <div class="topbar">
+            <div class="topbar-left">
+                <select><option>TQQQ Portfolio</option></select>
+                <span class="freshness">Prices as of market close Apr 10</span>
+            </div>
+            <button class="refresh-btn">🔄 Refresh</button>
+        </div>
+
+        <div id="overview" class="section active">
+            <div class="summary-strip">
+                <div class="metric">
+                    <div class="metric-label">Your Portfolio</div>
+                    <div class="metric-value">$47,832</div>
+                    <div class="metric-detail">Invested $42,500 · Div $312</div>
+                    <div class="metric-detail positive">+$5,644 (+13.3%)</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">vs S&P 500</div>
+                    <div class="metric-value">$46,219</div>
+                    <div class="metric-detail positive">You lead by $723</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">vs NASDAQ</div>
+                    <div class="metric-value">$48,105</div>
+                    <div class="metric-detail negative">You trail by $586</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Total Dividends</div>
+                    <div class="metric-value positive">$312.40</div>
+                    <div class="metric-detail">Across all holdings</div>
+                </div>
+            </div>
+
+            <div class="chart-wrap">
+                <div class="range-bar">
+                    <span class="range-pill">YTD</span>
+                    <span class="range-pill active">1Y</span>
+                    <span class="range-pill">3Y</span>
+                    <span class="range-pill">5Y</span>
+                    <span class="range-pill">All</span>
+                </div>
+                <div class="chart-placeholder">📈 Chart renders here</div>
+            </div>
+        </div>
+
+        <div id="holdings" class="section">
+            <table>
+                <thead><tr><th>Ticker</th><th>Shares</th><th>Cost Basis</th><th>Value</th><th>Dividends</th><th>Gain/Loss</th></tr></thead>
+                <tbody>
+                    <tr><td>TQQQ</td><td>150.00</td><td>$12,450</td><td>$14,220</td><td>$45.00</td><td class="positive">+$1,770</td></tr>
+                    <tr><td>AAPL</td><td>25.00</td><td>$4,375</td><td>$5,100</td><td>$62.50</td><td class="positive">+$725</td></tr>
+                    <tr><td>PRYMY</td><td>200.00</td><td>$3,200</td><td>$2,880</td><td>$0.00</td><td class="negative">-$320</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div id="transactions" class="section">
+            <table>
+                <thead><tr><th>Date</th><th>Ticker</th><th>Price</th><th>Shares</th><th>Total</th></tr></thead>
+                <tbody>
+                    <tr><td>2026-04-07</td><td>EMBJ</td><td>$24.50</td><td>100</td><td>$2,450</td></tr>
+                    <tr><td>2026-03-31</td><td>PRYMY</td><td>$16.00</td><td>200</td><td>$3,200</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div id="history" class="section">
+            <table>
+                <thead><tr><th>Date</th><th>Portfolio</th><th>VOO</th><th>QQQ</th></tr></thead>
+                <tbody>
+                    <tr><td>2026-04-10</td><td>$47,832</td><td>$46,219</td><td>$48,105</td></tr>
+                    <tr><td>2026-04-09</td><td>$47,510</td><td>$46,050</td><td>$47,890</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function showSection(id, el) {
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    el.classList.add('active');
+}
+</script>
+</body>
+</html>
