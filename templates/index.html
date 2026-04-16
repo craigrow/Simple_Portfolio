@@ -376,10 +376,9 @@ document.querySelectorAll("table.auto-sort").forEach(function(table) {
             rows.sort(function(a, b) {
                 var at = a.cells[colIdx].textContent.trim();
                 var bt = b.cells[colIdx].textContent.trim();
-                var an = parseFloat(at.replace(/[$,%]/g, ""));
-                var bn = parseFloat(bt.replace(/[$,%]/g, ""));
-                if (!isNaN(an) && !isNaN(bn)) { at = an; bt = bn; }
-                else { var ad = Date.parse(at), bd = Date.parse(bt); if (!isNaN(ad) && !isNaN(bd)) { at = ad; bt = bd; } }
+                var ad = Date.parse(at), bd = Date.parse(bt);
+                if (!isNaN(ad) && !isNaN(bd) && /^\d{4}-\d{2}-\d{2}/.test(at)) { at = ad; bt = bd; }
+                else { var an = parseFloat(at.replace(/[$,%]/g, "")), bn = parseFloat(bt.replace(/[$,%]/g, "")); if (!isNaN(an) && !isNaN(bn)) { at = an; bt = bn; } }
                 if (dir === "asc") return at < bt ? -1 : at > bt ? 1 : 0;
                 return at > bt ? -1 : at < bt ? 1 : 0;
             });

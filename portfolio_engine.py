@@ -121,13 +121,19 @@ def sync(paths):
 
         portfolio_rows.append([date_str, ticker, price, shares, total])
 
-        voo_row = _build_shadow_row(date_str, "VOO", total)
-        if voo_row:
-            voo_rows.append(voo_row)
+        try:
+            voo_row = _build_shadow_row(date_str, "VOO", total)
+            if voo_row:
+                voo_rows.append(voo_row)
+        except Exception:
+            pass
 
-        qqq_row = _build_shadow_row(date_str, "QQQ", total)
-        if qqq_row:
-            qqq_rows.append(qqq_row)
+        try:
+            qqq_row = _build_shadow_row(date_str, "QQQ", total)
+            if qqq_row:
+                qqq_rows.append(qqq_row)
+        except Exception:
+            pass
 
     _append_rows(paths["portfolio"], portfolio_rows)
     _append_rows(paths["shadow_voo"], voo_rows)
