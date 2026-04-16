@@ -25,9 +25,15 @@ import portfolio_engine
 
 for pid, name in portfolio_engine.list_portfolios():
     paths = portfolio_engine.get_paths(pid)
-    synced = portfolio_engine.sync(paths)
-    print(f"{name}: synced {synced} transactions")
+    try:
+        synced = portfolio_engine.sync(paths)
+        print(f"{name}: synced {synced} transactions")
+    except Exception as e:
+        print(f"{name}: sync skipped ({e})")
     if not os.path.exists(paths["price_history"]) or os.path.getsize(paths["price_history"]) == 0:
-        print(f"{name}: fetching initial price data...")
-        portfolio_engine.refresh_data(paths)
-        print(f"{name}: refresh complete")
+        try:
+            print(f"{name}: fetching initial price data...")
+            portfolio_engine.refresh_data(paths)
+            print(f"{name}: refresh complete")
+        except Exception as e:
+            print(f"{name}: refresh skipped ({e})")
