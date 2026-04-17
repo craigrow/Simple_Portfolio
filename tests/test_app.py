@@ -268,3 +268,14 @@ class TestComparisonColumns:
         # Shadow tabs should exist but not contain IRR/vs columns
         assert b"Shadow VOO" in resp.data
         assert b"Shadow QQQ" in resp.data
+
+
+class TestDateSorting:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_auto_sort_uses_date_parse(self, mock_price, client):
+        """Date columns should sort by timestamp, not alphabetically."""
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        resp = client.get("/?portfolio=test_portfolio")
+        # Verify the JS sort function includes Date.parse fallback
+        assert b"Date.parse" in resp.data
