@@ -279,3 +279,65 @@ class TestDateSorting:
         resp = client.get("/?portfolio=test_portfolio")
         # Verify the JS sort function includes Date.parse fallback
         assert b"Date.parse" in resp.data
+
+
+class TestMarketComparisonCard:
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_card_renders_when_data_available(self, mock_price, mock_open, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        # Write daily values with 2 rows so card appears
+        dv = pd.DataFrame([
+            ["2025-01-02", 1000.0, 900.0, 800.0],
+            ["2025-01-03", 1050.0, 920.0, 830.0],
+        ], columns=["DATE", "MAIN", "VOO", "QQQ"])
+        dv.to_csv(_paths()["daily_values"], index=False)
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"Today&#39;s Change" in resp.data or b"Today's Change" in resp.data
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_card_hidden_when_no_data(self, mock_price, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"Today" not in resp.data or b"Today&#39;s Change" not in resp.data
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_positive_change_has_green_class(self, mock_price, mock_open, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        dv = pd.DataFrame([
+            ["2025-01-02", 1000.0, 900.0, 800.0],
+            ["2025-01-03", 1050.0, 920.0, 830.0],
+        ], columns=["DATE", "MAIN", "VOO", "QQQ"])
+        dv.to_csv(_paths()["daily_values"], index=False)
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"positive" in resp.data
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_negative_change_has_red_class(self, mock_price, mock_open, client):
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=1)
+        prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        # Portfolio went DOWN
+        dv = pd.DataFrame([
+            ["2025-01-02", 1050.0, 920.0, 830.0],
+            ["2025-01-03", 1000.0, 900.0, 800.0],
+        ], columns=["DATE", "MAIN", "VOO", "QQQ"])
+        dv.to_csv(_paths()["daily_values"], index=False)
+        resp = client.get("/?portfolio=test_portfolio")
+        assert b"negative" in resp.data

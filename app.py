@@ -55,6 +55,12 @@ def index():
     shadow_columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"]
     port_df = portfolio_engine.add_comparison_columns(port_df, shadow_voo_df, shadow_qqq_df)
     portfolio_summary = portfolio_engine.portfolio_summary(port_df)
+    market_today = portfolio_engine.get_market_comparison(
+        portfolio_value + portfolio_divs,
+        voo_value + voo_divs,
+        qqq_value + qqq_divs,
+        paths,
+    )
     return render_template(
         "index.html",
         portfolios=portfolios,
@@ -76,6 +82,7 @@ def index():
         voo_invested=shadow_voo_df["TOTAL_VALUE"].sum() if not shadow_voo_df.empty else 0.0,
         qqq_invested=shadow_qqq_df["TOTAL_VALUE"].sum() if not shadow_qqq_df.empty else 0.0,
         history=history,
+        market_today=market_today,
         last_updated=portfolio_engine.get_last_updated(paths),
         needs_refresh=portfolio_engine.needs_refresh(paths),
     )

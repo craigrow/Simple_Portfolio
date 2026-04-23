@@ -822,6 +822,47 @@ def update_prices(paths, max_retries=3):
     return {"status": "ok", "last_updated": ts}
 
 
+def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
+    """Compare current portfolio values to prior close for the 'Vs. the Market Today' card.
+    Returns dict with changes and deltas, or None if insufficient data."""
+    cache_path = paths["daily_values"]
+    if not os.path.exists(cache_path):
+        return None
+    df = pd.read_csv(cache_path)
+    if len(df) < 2:
+        return None
+
+    market_open = _is_market_open()
+    if market_open:
+        last = df.iloc[-1]
+        port_base, voo_base, qqq_base = last["MAIN"], last["VOO"], last["QQQ"]
+        port_change = portfolio_total - port_base
+        voo_change = voo_total - voo_base
+        qqq_change = qqq_total - qqq_base
+    else:
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
+        port_change = last["MAIN"] - port_base
+        voo_change = last["VOO"] - voo_base
+        qqq_change = last["QQQ"] - qqq_base
+
+    def _pct(change, base):
+        return round(change / base * 100, 2) if base else 0.0
+
+    return {
+        "portfolio_change": round(port_change, 2),
+        "portfolio_pct": _pct(port_change, port_base),
+        "voo_change": round(voo_change, 2),
+        "voo_pct": _pct(voo_change, voo_base),
+        "qqq_change": round(qqq_change, 2),
+        "qqq_pct": _pct(qqq_change, qqq_base),
+        "vs_voo": round(port_change - voo_change, 2),
+        "vs_qqq": round(port_change - qqq_change, 2),
+        "market_open": market_open,
+    }
+
+
 def refresh_data(paths):
     """Full refresh: sync new transactions, splits, dividends, update prices, and recompute chart."""
     sync(paths)

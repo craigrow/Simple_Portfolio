@@ -23,7 +23,7 @@ select { background: var(--surface2); color: var(--text); border: 1px solid var(
 
 .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
 
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
 .card-label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
 .card-value { font-size: 1.75rem; font-weight: 700; }
@@ -68,7 +68,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
     .header { padding: 0.75rem 1rem; }
     .header h1 { font-size: 1.1rem; }
     .container { padding: 1rem; }
-    .cards { grid-template-columns: 1fr; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
     .card-value { font-size: 1.4rem; }
     table { font-size: 0.8rem; }
     th, td { padding: 0.5rem 0.4rem; }
@@ -111,23 +111,34 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         <div class="card">
             <div class="card-label">Your Portfolio</div>
             <div class="card-value">${{ "{:,.0f}".format(main_total) }}</div>
-            <div class="card-sub">Invested ${{ "{:,.0f}".format(portfolio_invested) }} · Dividends ${{ "{:,.2f}".format(portfolio_divs) }}</div>
-            <div class="card-sub {{ 'positive' if main_gain >= 0 else 'negative' }}">{{ "{:+,.2f}".format(main_gain) }}</div>
+            <div class="card-sub">Invested ${{ "{:,.0f}".format(portfolio_invested) }}</div>
+            <div class="card-sub">Dividends ${{ "{:,.2f}".format(portfolio_divs) }}</div>
+            <div class="card-sub {{ 'positive' if main_gain >= 0 else 'negative' }}">{{ "+" if main_gain >= 0 else "-" }}${{ "{:,.2f}".format(main_gain|abs) }}</div>
         </div>
         <div class="card">
             <div class="card-label">vs VOO (S&P 500)</div>
             <div class="card-value">${{ "{:,.0f}".format(voo_total) }}</div>
-            <div class="card-sub">Invested ${{ "{:,.0f}".format(voo_invested) }} · Dividends ${{ "{:,.2f}".format(voo_divs) }}</div>
+            <div class="card-sub">Invested ${{ "{:,.0f}".format(voo_invested) }}</div>
+            <div class="card-sub">Dividends ${{ "{:,.2f}".format(voo_divs) }}</div>
             {% set diff_voo = main_total - voo_total %}
             <div class="card-sub {{ 'positive' if diff_voo >= 0 else 'negative' }}">{{ "Ahead" if diff_voo >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_voo|abs) }}</div>
         </div>
         <div class="card">
             <div class="card-label">vs QQQ (NASDAQ)</div>
             <div class="card-value">${{ "{:,.0f}".format(qqq_total) }}</div>
-            <div class="card-sub">Invested ${{ "{:,.0f}".format(qqq_invested) }} · Dividends ${{ "{:,.2f}".format(qqq_divs) }}</div>
+            <div class="card-sub">Invested ${{ "{:,.0f}".format(qqq_invested) }}</div>
+            <div class="card-sub">Dividends ${{ "{:,.2f}".format(qqq_divs) }}</div>
             {% set diff_qqq = main_total - qqq_total %}
             <div class="card-sub {{ 'positive' if diff_qqq >= 0 else 'negative' }}">{{ "Ahead" if diff_qqq >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_qqq|abs) }}</div>
         </div>
+        {% if market_today %}
+        <div class="card">
+            <div class="card-label">Today's Change</div>
+            <div class="card-value {{ 'positive' if market_today.portfolio_change >= 0 else 'negative' }}">{{ "+" if market_today.portfolio_change >= 0 else "-" }}${{ "{:,.0f}".format(market_today.portfolio_change|abs) }} ({{ "{:+.2f}".format(market_today.portfolio_pct) }}%)</div>
+            <div class="card-sub">VOO {{ "+" if market_today.voo_change >= 0 else "-" }}${{ "{:,.0f}".format(market_today.voo_change|abs) }} ({{ "{:+.2f}".format(market_today.voo_pct) }}%)</div>
+            <div class="card-sub">QQQ {{ "+" if market_today.qqq_change >= 0 else "-" }}${{ "{:,.0f}".format(market_today.qqq_change|abs) }} ({{ "{:+.2f}".format(market_today.qqq_pct) }}%)</div>
+        </div>
+        {% endif %}
     </div>
 
     {% if history %}

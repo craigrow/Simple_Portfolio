@@ -779,3 +779,63 @@ class TestAddComparisonColumns:
         original_cols = list(main.columns)
         portfolio_engine.add_comparison_columns(main, voo, qqq)
         assert list(main.columns) == original_cols
+
+
+class TestGetMarketComparison:
+    def _write_daily_values(self, rows):
+        """Write daily_values.csv with MAIN/VOO/QQQ columns."""
+        df = pd.DataFrame(rows, columns=["DATE", "MAIN", "VOO", "QQQ"])
+        df.to_csv(_paths()["daily_values"], index=False)
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_market_closed_uses_last_two_closes(self, mock_open):
+        self._write_daily_values([
+            ["2025-01-02", 1000.0, 900.0, 800.0],
+            ["2025-01-03", 1050.0, 920.0, 830.0],
+            ["2025-01-06", 1100.0, 950.0, 860.0],
+        ])
+        result = portfolio_engine.get_market_comparison(9999, 9999, 9999, _paths())
+        assert result["portfolio_change"] == 50.0   # 1100 - 1050
+        assert result["voo_change"] == 30.0          # 950 - 920
+        assert result["qqq_change"] == 30.0          # 860 - 830
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_market_open_uses_current_vs_last_close(self, mock_open):
+        self._write_daily_values([
+            ["2025-01-02", 1000.0, 900.0, 800.0],
+            ["2025-01-03", 1050.0, 920.0, 830.0],
+        ])
+        result = portfolio_engine.get_market_comparison(1080.0, 940.0, 850.0, _paths())
+        assert result["portfolio_change"] == 30.0    # 1080 - 1050
+        assert result["voo_change"] == 20.0          # 940 - 920
+        assert result["qqq_change"] == 20.0          # 850 - 830
+
+    def test_returns_none_when_insufficient_data(self):
+        self._write_daily_values = None  # no file
+        result = portfolio_engine.get_market_comparison(1000, 900, 800, _paths())
+        assert result is None
+
+    def test_returns_none_with_one_row(self):
+        df = pd.DataFrame([["2025-01-02", 1000.0, 900.0, 800.0]],
+                          columns=["DATE", "MAIN", "VOO", "QQQ"])
+        df.to_csv(_paths()["daily_values"], index=False)
+        result = portfolio_engine.get_market_comparison(1000, 900, 800, _paths())
+        assert result is None
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_vs_voo_and_qqq_deltas(self, mock_open):
+        df = pd.DataFrame([
+            ["2025-01-02", 1000.0, 900.0, 800.0],
+            ["2025-01-03", 1100.0, 950.0, 870.0],
+        ], columns=["DATE", "MAIN", "VOO", "QQQ"])
+        df.to_csv(_paths()["daily_values"], index=False)
+        result = portfolio_engine.get_market_comparison(9999, 9999, 9999, _paths())
+        # portfolio_change=100, voo_change=50, qqq_change=70
+        assert result["vs_voo"] == 50.0   # 100 - 50
+        assert result["vs_qqq"] == 30.0   # 100 - 70
+
+    def test_empty_daily_values_file(self):
+        df = pd.DataFrame(columns=["DATE", "MAIN", "VOO", "QQQ"])
+        df.to_csv(_paths()["daily_values"], index=False)
+        result = portfolio_engine.get_market_comparison(1000, 900, 800, _paths())
+        assert result is None
