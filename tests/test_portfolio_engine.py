@@ -805,10 +805,11 @@ class TestGetMarketComparison:
             ["2025-01-02", 1000.0, 900.0, 800.0],
             ["2025-01-03", 1050.0, 920.0, 830.0],
         ])
+        # During market hours, iloc[-1] is today's stale value; base = iloc[-2] (prior close)
         result = portfolio_engine.get_market_comparison(1080.0, 940.0, 850.0, _paths())
-        assert result["portfolio_change"] == 30.0    # 1080 - 1050
-        assert result["voo_change"] == 20.0          # 940 - 920
-        assert result["qqq_change"] == 20.0          # 850 - 830
+        assert result["portfolio_change"] == 80.0    # 1080 - 1000 (prior close)
+        assert result["voo_change"] == 40.0          # 940 - 900
+        assert result["qqq_change"] == 50.0          # 850 - 800
 
     def test_returns_none_when_insufficient_data(self):
         self._write_daily_values = None  # no file

@@ -834,8 +834,13 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
 
     market_open = _is_market_open()
     if market_open:
-        last = df.iloc[-1]
-        port_base, voo_base, qqq_base = last["MAIN"], last["VOO"], last["QQQ"]
+        # During market hours, daily_values[-1] is today's (stale) computed value
+        # because update_prices writes intraday prices into price_history.
+        # Use prior close (iloc[-2]) as the base, compare against live totals.
+        if len(df) < 2:
+            return None
+        prev = df.iloc[-2]
+        port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
         port_change = portfolio_total - port_base
         voo_change = voo_total - voo_base
         qqq_change = qqq_total - qqq_base
