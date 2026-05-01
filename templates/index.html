@@ -24,6 +24,7 @@ select { background: var(--surface2); color: var(--text); border: 1px solid var(
 .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
 
 .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+.movers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
 .card-label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
 .card-value { font-size: 1.75rem; font-weight: 700; }
@@ -69,6 +70,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
     .header h1 { font-size: 1.1rem; }
     .container { padding: 1rem; }
     .cards { grid-template-columns: repeat(2, 1fr); }
+    .movers { grid-template-columns: repeat(2, 1fr); }
     .card-value { font-size: 1.4rem; }
     table { font-size: 0.8rem; }
     th, td { padding: 0.5rem 0.4rem; }
@@ -154,6 +156,47 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         <input type="range" id="range-slider" min="0" max="100" value="0">
         <div class="chart-container">
             <canvas id="historyChart"></canvas>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if gainers or losers %}
+    <div class="movers">
+        <div class="card">
+            <div class="card-label">Top Gainers ($)</div>
+            {% for g in gainers %}
+            <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.9rem;">
+                <span>{{ g.TICKER }}</span>
+                <span class="{{ 'positive' if g.CHANGE >= 0 else 'negative' }}">{{ "+" if g.CHANGE >= 0 else "-" }}${{ "{:,.2f}".format(g.CHANGE|abs) }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="card">
+            <div class="card-label">Top Gainers (%)</div>
+            {% for g in pct_gainers %}
+            <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.9rem;">
+                <span>{{ g.TICKER }}</span>
+                <span class="{{ 'positive' if g.PCT >= 0 else 'negative' }}">{{ "{:+.2f}".format(g.PCT) }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="card">
+            <div class="card-label">Top Losers ($)</div>
+            {% for l in losers %}
+            <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.9rem;">
+                <span>{{ l.TICKER }}</span>
+                <span class="{{ 'positive' if l.CHANGE >= 0 else 'negative' }}">{{ "+" if l.CHANGE >= 0 else "-" }}${{ "{:,.2f}".format(l.CHANGE|abs) }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="card">
+            <div class="card-label">Top Losers (%)</div>
+            {% for l in pct_losers %}
+            <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.9rem;">
+                <span>{{ l.TICKER }}</span>
+                <span class="{{ 'positive' if l.PCT >= 0 else 'negative' }}">{{ "{:+.2f}".format(l.PCT) }}%</span>
+            </div>
+            {% endfor %}
         </div>
     </div>
     {% endif %}

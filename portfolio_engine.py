@@ -868,6 +868,33 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
     }
 
 
+def get_gainers_losers(portfolio_summary_data, paths, n=5):
+    """Return top/bottom n by dollar change and by percent change.
+    Returns (dollar_gainers, dollar_losers, pct_gainers, pct_losers)."""
+    prices_path = paths["price_history"]
+    if not os.path.exists(prices_path) or not portfolio_summary_data:
+        return [], [], [], []
+    prices_df = pd.read_csv(prices_path, index_col=0, parse_dates=True)
+    if len(prices_df) < 2:
+        return [], [], [], []
+    today_prices = prices_df.iloc[-1]
+    prev_prices = prices_df.iloc[-2]
+    changes = []
+    for row in portfolio_summary_data:
+        ticker = row["TICKER"]
+        shares = row["SHARES_OWNED"]
+        if ticker in today_prices.index and ticker in prev_prices.index:
+            tp = today_prices[ticker]
+            pp = prev_prices[ticker]
+            if pd.notna(tp) and pd.notna(pp) and pp != 0:
+                dollar = round((tp - pp) * shares, 2)
+                pct = round((tp - pp) / pp * 100, 2)
+                changes.append({"TICKER": ticker, "CHANGE": dollar, "PCT": pct})
+    by_dollar = sorted(changes, key=lambda x: x["CHANGE"], reverse=True)
+    by_pct = sorted(changes, key=lambda x: x["PCT"], reverse=True)
+    return by_dollar[:n], by_dollar[-n:][::-1], by_pct[:n], by_pct[-n:][::-1]
+
+
 def refresh_data(paths):
     """Full refresh: sync new transactions, splits, dividends, update prices, and recompute chart."""
     sync(paths)

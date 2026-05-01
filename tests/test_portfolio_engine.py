@@ -840,3 +840,95 @@ class TestGetMarketComparison:
         df.to_csv(_paths()["daily_values"], index=False)
         result = portfolio_engine.get_market_comparison(1000, 900, 800, _paths())
         assert result is None
+
+
+class TestGetGainersLosers:
+    def _write_prices(self, rows, tickers):
+        """Write price_history.csv with given rows. rows = list of [date, p1, p2, ...]"""
+        df = pd.DataFrame(rows, columns=["Date"] + tickers).set_index("Date")
+        df.index = pd.to_datetime(df.index)
+        df.to_csv(_paths()["price_history"])
+
+    def _summary(self, holdings):
+        """holdings = list of (ticker, shares)"""
+        return [{"TICKER": t, "SHARES_OWNED": s} for t, s in holdings]
+
+    def test_basic_ranking(self):
+        self._write_prices([
+            ["2025-01-02", 100, 50, 200],
+            ["2025-01-03", 110, 45, 210],
+        ], ["AAPL", "GOOG", "MSFT"])
+        summary = self._summary([("AAPL", 10), ("GOOG", 20), ("MSFT", 5)])
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths(), n=2)
+        # Dollar: AAPL +$100, MSFT +$50, GOOG -$100
+        assert len(g) == 2
+        assert g[0]["TICKER"] == "AAPL"
+        assert g[0]["CHANGE"] == 100.0
+        assert g[1]["TICKER"] == "MSFT"
+        assert len(l) == 2
+        assert l[0]["TICKER"] == "GOOG"  # worst first
+        assert l[0]["CHANGE"] == -100.0
+
+    def test_percentage_ranking(self):
+        self._write_prices([
+            ["2025-01-02", 100, 50, 200],
+            ["2025-01-03", 110, 45, 210],
+        ], ["AAPL", "GOOG", "MSFT"])
+        summary = self._summary([("AAPL", 10), ("GOOG", 20), ("MSFT", 5)])
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths(), n=2)
+        # Pct: AAPL +10%, MSFT +5%, GOOG -10%
+        assert pg[0]["TICKER"] == "AAPL"
+        assert pg[0]["PCT"] == 10.0
+        assert pg[1]["TICKER"] == "MSFT"
+        assert pg[1]["PCT"] == 5.0
+        assert pl[0]["TICKER"] == "GOOG"  # worst first
+        assert pl[0]["PCT"] == -10.0
+
+    def test_losers_sorted_worst_first(self):
+        self._write_prices([
+            ["2025-01-02", 100, 50, 200],
+            ["2025-01-03", 95, 48, 180],
+        ], ["A", "B", "C"])
+        summary = self._summary([("A", 10), ("B", 10), ("C", 10)])
+        # Dollar: A -$50, B -$20, C -$200
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths(), n=3)
+        assert l[0]["TICKER"] == "C"   # -$200 worst
+        assert l[1]["TICKER"] == "A"   # -$50
+        assert l[2]["TICKER"] == "B"   # -$20
+
+    def test_empty_summary(self):
+        g, l, pg, pl = portfolio_engine.get_gainers_losers([], _paths())
+        assert g == l == pg == pl == []
+
+    def test_no_price_history(self):
+        summary = self._summary([("AAPL", 10)])
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths())
+        assert g == l == pg == pl == []
+
+    def test_single_row_price_history(self):
+        self._write_prices([["2025-01-02", 100]], ["AAPL"])
+        summary = self._summary([("AAPL", 10)])
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths())
+        assert g == l == pg == pl == []
+
+    def test_ticker_missing_from_prices(self):
+        self._write_prices([
+            ["2025-01-02", 100],
+            ["2025-01-03", 110],
+        ], ["AAPL"])
+        summary = self._summary([("AAPL", 10), ("GOOG", 20)])
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths(), n=5)
+        assert len(g) == 1
+        assert g[0]["TICKER"] == "AAPL"
+
+    def test_n_limits_results(self):
+        self._write_prices([
+            ["2025-01-02", 10, 20, 30, 40, 50, 60],
+            ["2025-01-03", 11, 22, 33, 38, 48, 55],
+        ], ["A", "B", "C", "D", "E", "F"])
+        summary = self._summary([("A", 10), ("B", 10), ("C", 10), ("D", 10), ("E", 10), ("F", 10)])
+        g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths(), n=3)
+        assert len(g) == 3
+        assert len(l) == 3
+        assert len(pg) == 3
+        assert len(pl) == 3

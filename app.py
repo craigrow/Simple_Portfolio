@@ -61,6 +61,7 @@ def index():
         qqq_value + qqq_divs,
         paths,
     )
+    gainers, losers, pct_gainers, pct_losers = portfolio_engine.get_gainers_losers(portfolio_summary, paths)
     return render_template(
         "index.html",
         portfolios=portfolios,
@@ -83,6 +84,10 @@ def index():
         qqq_invested=shadow_qqq_df["TOTAL_VALUE"].sum() if not shadow_qqq_df.empty else 0.0,
         history=history,
         market_today=market_today,
+        gainers=gainers,
+        losers=losers,
+        pct_gainers=pct_gainers,
+        pct_losers=pct_losers,
         last_updated=portfolio_engine.get_last_updated(paths),
         needs_refresh=portfolio_engine.needs_refresh(paths),
     )
