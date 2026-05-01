@@ -410,6 +410,23 @@ class TestEnrichWithDividends:
         assert enriched.iloc[0]["TOTAL_DIVIDENDS"] == 7.5
         assert divs == 7.5
 
+    @patch.object(portfolio_engine, "_fetch_current_prices", return_value={"MSFT": 150.0})
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_enrich_gain_loss_column(self, mock_close, mock_prices):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        with open(_paths()["splits"], "w", newline="") as f:
+            csv.writer(f).writerow(["TICKER", "DATE", "RATIO"])
+        with open(_paths()["dividends"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "AMOUNT"])
+            writer.writerow(["MSFT", "2025-06-01", 0.75])
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        enriched, value, divs = portfolio_engine.enrich_portfolio(portfolio, paths=_paths())
+        # GAIN_LOSS = (current_value + dividends) - total_invested
+        # = (150*10 + 7.5) - (100*10) = 1507.5 - 1000 = 507.5
+        assert enriched.iloc[0]["GAIN_LOSS"] == 507.5
+
 
 class TestPortfolioSummary:
     def test_empty_dataframe(self):

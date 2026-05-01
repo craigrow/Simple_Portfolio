@@ -51,8 +51,8 @@ def index():
 
     # Chart from cached daily values (no computation on page load)
     history = portfolio_engine.get_cached_daily_values(paths)
-    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "IRR", "VS_VOO", "VS_QQQ"]
-    shadow_columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN"]
+    columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "GAIN_LOSS", "VS_VOO", "VS_QQQ", "IRR"]
+    shadow_columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "GAIN_LOSS"]
     port_df = portfolio_engine.add_comparison_columns(port_df, shadow_voo_df, shadow_qqq_df)
     portfolio_summary = portfolio_engine.portfolio_summary(port_df)
     market_today = portfolio_engine.get_market_comparison(

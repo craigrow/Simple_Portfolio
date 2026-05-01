@@ -232,8 +232,8 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
     <div id="transactions" class="tab-panel">
         {% macro render_txn_table(title, rows, columns, show_title) %}
         {% if rows %}
-        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends", "TOTAL_RETURN": "Total Return", "IRR": "IRR", "VS_VOO": "vs VOO", "VS_QQQ": "vs QQQ"} %}
-        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "VS_VOO", "VS_QQQ"] %}
+        {% set col_labels = {"DATE": "Date", "TICKER": "Ticker", "PURCHASE_PRICE": "Purchase Price", "SHARES_PURCHASED": "Shares Purchased", "TOTAL_VALUE": "Total Invested", "CURRENT_SHARES": "Current Shares", "CURRENT_VALUE": "Current Value", "TOTAL_DIVIDENDS": "Dividends", "TOTAL_RETURN": "Total Value", "GAIN_LOSS": "Total Return", "IRR": "IRR", "VS_VOO": "vs VOO", "VS_QQQ": "vs QQQ"} %}
+        {% set dollar_cols = ["PURCHASE_PRICE", "TOTAL_VALUE", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "GAIN_LOSS", "VS_VOO", "VS_QQQ"] %}
         {% set pct_cols = ["IRR"] %}
         <table class="auto-sort">
             <thead>

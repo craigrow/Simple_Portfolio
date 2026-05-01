@@ -359,6 +359,7 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
     enriched["CURRENT_VALUE"] = current_values
     enriched["TOTAL_DIVIDENDS"] = total_dividends
     enriched["TOTAL_RETURN"] = [round(cv + td, 2) for cv, td in zip(current_values, total_dividends)]
+    enriched["GAIN_LOSS"] = [round(cv + td - tv, 2) for cv, td, tv in zip(current_values, total_dividends, enriched["TOTAL_VALUE"])]
     return enriched, round(sum(current_values), 2), round(sum(total_dividends), 2)
 
 
