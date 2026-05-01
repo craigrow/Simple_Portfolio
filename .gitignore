@@ -5,3 +5,4 @@ __pycache__/
 flask.log
 portfolios/*/data/*.csv
 !portfolios/*/data/.gitkeep
+portfolios/*/backup_*/
