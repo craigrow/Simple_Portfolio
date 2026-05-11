@@ -634,6 +634,16 @@ class TestRefreshDataErrorHandling:
         assert result["status"] == "incomplete"
         assert "X" in result["failed_tickers"]
 
+    def test_returns_error_when_chart_update_fails(self):
+        with patch.object(portfolio_engine, "sync"):
+            with patch.object(portfolio_engine, "sync_splits"):
+                with patch.object(portfolio_engine, "sync_dividends"):
+                    with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
+                        with patch.object(portfolio_engine, "compute_daily_values", side_effect=RuntimeError("chart boom")):
+                            result = portfolio_engine.refresh_data(_paths())
+        assert result["status"] == "error"
+        assert "chart boom" in result["message"]
+
 
 class TestVectorizedPortfolioValues:
     def test_empty_portfolio(self):
@@ -705,6 +715,30 @@ class TestComputeDailyValues:
         r2 = portfolio_engine.compute_daily_values(_paths())
         assert len(r1) == len(r2)
         assert r1[0]["MAIN"] == r2[0]["MAIN"]
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_replaces_last_cached_row_for_intraday_update(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        initial_prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0],
+            "VOO": [500.0, 505.0],
+            "QQQ": [400.0, 405.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03"]))
+        initial_prices.to_csv(_paths()["price_history"])
+        portfolio_engine.compute_daily_values(_paths())
+
+        intraday_prices = pd.DataFrame({
+            "MSFT": [100.0, 115.0],
+            "VOO": [500.0, 515.0],
+            "QQQ": [400.0, 415.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03"]))
+        intraday_prices.to_csv(_paths()["price_history"])
+        result = portfolio_engine.compute_daily_values(_paths())
+
+        assert len(result) == 2
+        assert result[-1]["DATE"] == "2025-01-03"
+        assert result[-1]["MAIN"] == 1150.0
 
 
 class TestGetCachedDailyValues:

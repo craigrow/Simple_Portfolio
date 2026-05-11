@@ -616,10 +616,11 @@ def compute_daily_values(paths):
         if cached_count == txn_count:
             cached = pd.read_csv(cache_path, parse_dates=["DATE"])
             last_cached = cached["DATE"].max()
-            new_prices = prices_df.loc[last_cached + pd.Timedelta(days=1):]
+            new_prices = prices_df.loc[last_cached:]
             if new_prices.empty:
                 return cached.to_dict("records")
-            # Delta: compute only new days
+            # Delta: recompute from the last cached date so intraday rows for
+            # an existing date replace stale cached values.
             main_vals = _vectorized_portfolio_values(port_df, splits_df, dividends_df, new_prices)
             voo_vals = _vectorized_portfolio_values(voo_df, splits_df, dividends_df, new_prices)
             qqq_vals = _vectorized_portfolio_values(qqq_df, splits_df, dividends_df, new_prices)
@@ -629,6 +630,7 @@ def compute_daily_values(paths):
                 "VOO": voo_vals.round(2).values,
                 "QQQ": qqq_vals.round(2).values,
             })
+            cached = cached[cached["DATE"] < last_cached]
             combined = pd.concat([cached, new_df], ignore_index=True)
             combined.to_csv(cache_path, index=False)
             return combined.to_dict("records")
@@ -935,7 +937,10 @@ def refresh_data(paths):
         pass
     result = update_prices(paths)
     try:
-        compute_daily_values(paths)
-    except Exception:
-        pass
+        history = compute_daily_values(paths)
+        result["chart_points"] = len(history)
+    except Exception as e:
+        result = dict(result)
+        result["status"] = "error"
+        result["message"] = f"Prices refreshed but chart update failed: {e}"
     return result
