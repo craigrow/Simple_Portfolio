@@ -738,7 +738,14 @@ def update_prices(paths, max_retries=3):
     # If cache covers last close and market is open, fetch live intraday prices
     if cache_current and market_open:
         try:
-            data = yf.download(all_tickers, period="1d", progress=False)
+            end = pd.Timestamp.now(tz="America/New_York").normalize() + pd.Timedelta(days=1)
+            start = end - pd.Timedelta(days=5)
+            data = yf.download(
+                all_tickers,
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                progress=False,
+            )
             if not data.empty:
                 close = data["Close"]
                 if isinstance(close, pd.Series):
@@ -835,13 +842,32 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
 
     market_open = _is_market_open()
     if market_open:
-        # During market hours, daily_values[-1] is today's (stale) computed value
-        # because update_prices writes intraday prices into price_history.
-        # Use prior close (iloc[-2]) as the base, compare against live totals.
-        if len(df) < 2:
-            return None
-        prev = df.iloc[-2]
-        port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+
+        def _daily_values_base():
+            last_date = pd.to_datetime(df.iloc[-1]["DATE"]).date()
+            return df.iloc[-2] if last_date == today else df.iloc[-1]
+
+        price_history_path = paths["price_history"]
+        if os.path.exists(price_history_path):
+            prices_df = pd.read_csv(price_history_path, index_col=0, parse_dates=True)
+            prior_prices = prices_df[prices_df.index.date < today]
+            if not prior_prices.empty:
+                splits_df = _read_splits(paths)
+                dividends_df = _read_dividends(paths)
+                port_df, voo_df, qqq_df = load_all(paths)
+                main_vals = _vectorized_portfolio_values(port_df, splits_df, dividends_df, prior_prices)
+                voo_vals = _vectorized_portfolio_values(voo_df, splits_df, dividends_df, prior_prices)
+                qqq_vals = _vectorized_portfolio_values(qqq_df, splits_df, dividends_df, prior_prices)
+                port_base = main_vals.iloc[-1]
+                voo_base = voo_vals.iloc[-1]
+                qqq_base = qqq_vals.iloc[-1]
+            else:
+                prev = _daily_values_base()
+                port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
+        else:
+            prev = _daily_values_base()
+            port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
         port_change = portfolio_total - port_base
         voo_change = voo_total - voo_base
         qqq_change = qqq_total - qqq_base
