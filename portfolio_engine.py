@@ -699,6 +699,13 @@ def needs_refresh(paths):
         return True
 
 
+def should_auto_refresh(paths):
+    """Return True when the page should automatically refresh cached data."""
+    if _is_market_open():
+        return True
+    return needs_refresh(paths)
+
+
 def _set_last_updated(paths, close_date=None, intraday=False):
     """Write last-updated info. Stores ISO timestamp for intraday, date for closing."""
     os.makedirs(os.path.dirname(paths["last_updated"]), exist_ok=True)

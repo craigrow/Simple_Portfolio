@@ -16,7 +16,8 @@ def index():
                                shadow_qqq=[], columns=[], shadow_columns=[], portfolio_value=0,
                                voo_value=0, qqq_value=0, portfolio_divs=0,
                                voo_divs=0, qqq_divs=0, portfolio_invested=0,
-                               voo_invested=0, qqq_invested=0, history=[])
+                               voo_invested=0, qqq_invested=0, history=[],
+                               auto_refresh=False)
     if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
         portfolio_id = portfolios[0][0]
 
@@ -90,6 +91,7 @@ def index():
         pct_losers=pct_losers,
         last_updated=portfolio_engine.get_last_updated(paths),
         needs_refresh=portfolio_engine.needs_refresh(paths),
+        auto_refresh=portfolio_engine.should_auto_refresh(paths),
     )
 
 

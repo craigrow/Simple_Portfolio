@@ -550,6 +550,22 @@ class TestNeedsRefresh:
         assert portfolio_engine.needs_refresh(_paths()) is True
 
 
+class TestShouldAutoRefresh:
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_true_when_market_open(self, mock_open):
+        assert portfolio_engine.should_auto_refresh(_paths()) is True
+
+    @patch.object(portfolio_engine, "needs_refresh", return_value=True)
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_true_when_market_closed_but_stale(self, mock_open, mock_needs):
+        assert portfolio_engine.should_auto_refresh(_paths()) is True
+
+    @patch.object(portfolio_engine, "needs_refresh", return_value=False)
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_false_when_market_closed_and_fresh(self, mock_open, mock_needs):
+        assert portfolio_engine.should_auto_refresh(_paths()) is False
+
+
 class TestGetLastUpdated:
     def test_returns_none_when_missing(self):
         assert portfolio_engine.get_last_updated(_paths()) is None
