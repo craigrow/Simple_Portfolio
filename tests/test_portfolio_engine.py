@@ -550,6 +550,22 @@ class TestNeedsRefresh:
         assert portfolio_engine.needs_refresh(_paths()) is True
 
 
+class TestShouldAutoRefresh:
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_true_when_market_open(self, mock_open):
+        assert portfolio_engine.should_auto_refresh(_paths()) is True
+
+    @patch.object(portfolio_engine, "needs_refresh", return_value=True)
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_true_when_market_closed_but_stale(self, mock_open, mock_needs):
+        assert portfolio_engine.should_auto_refresh(_paths()) is True
+
+    @patch.object(portfolio_engine, "needs_refresh", return_value=False)
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_false_when_market_closed_and_fresh(self, mock_open, mock_needs):
+        assert portfolio_engine.should_auto_refresh(_paths()) is False
+
+
 class TestGetLastUpdated:
     def test_returns_none_when_missing(self):
         assert portfolio_engine.get_last_updated(_paths()) is None
@@ -634,6 +650,16 @@ class TestRefreshDataErrorHandling:
         assert result["status"] == "incomplete"
         assert "X" in result["failed_tickers"]
 
+    def test_returns_error_when_chart_update_fails(self):
+        with patch.object(portfolio_engine, "sync"):
+            with patch.object(portfolio_engine, "sync_splits"):
+                with patch.object(portfolio_engine, "sync_dividends"):
+                    with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
+                        with patch.object(portfolio_engine, "compute_daily_values", side_effect=RuntimeError("chart boom")):
+                            result = portfolio_engine.refresh_data(_paths())
+        assert result["status"] == "error"
+        assert "chart boom" in result["message"]
+
 
 class TestVectorizedPortfolioValues:
     def test_empty_portfolio(self):
@@ -705,6 +731,30 @@ class TestComputeDailyValues:
         r2 = portfolio_engine.compute_daily_values(_paths())
         assert len(r1) == len(r2)
         assert r1[0]["MAIN"] == r2[0]["MAIN"]
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_replaces_last_cached_row_for_intraday_update(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        initial_prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0],
+            "VOO": [500.0, 505.0],
+            "QQQ": [400.0, 405.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03"]))
+        initial_prices.to_csv(_paths()["price_history"])
+        portfolio_engine.compute_daily_values(_paths())
+
+        intraday_prices = pd.DataFrame({
+            "MSFT": [100.0, 115.0],
+            "VOO": [500.0, 515.0],
+            "QQQ": [400.0, 415.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03"]))
+        intraday_prices.to_csv(_paths()["price_history"])
+        result = portfolio_engine.compute_daily_values(_paths())
+
+        assert len(result) == 2
+        assert result[-1]["DATE"] == "2025-01-03"
+        assert result[-1]["MAIN"] == 1150.0
 
 
 class TestGetCachedDailyValues:
@@ -822,11 +872,48 @@ class TestGetMarketComparison:
             ["2025-01-02", 1000.0, 900.0, 800.0],
             ["2025-01-03", 1050.0, 920.0, 830.0],
         ])
-        # During market hours, iloc[-1] is today's stale value; base = iloc[-2] (prior close)
+        # When the cache ends at a prior close, use the latest cached row as the base.
         result = portfolio_engine.get_market_comparison(1080.0, 940.0, 850.0, _paths())
-        assert result["portfolio_change"] == 80.0    # 1080 - 1000 (prior close)
+        assert result["portfolio_change"] == 30.0    # 1080 - 1050
+        assert result["voo_change"] == 20.0          # 940 - 920
+        assert result["qqq_change"] == 20.0          # 850 - 830
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_market_open_with_intraday_row_uses_previous_close(self, mock_open):
+        today = portfolio_engine.datetime.now(
+            portfolio_engine.ZoneInfo("America/New_York")
+        ).strftime("%Y-%m-%d")
+        self._write_daily_values([
+            ["2025-01-02", 1000.0, 900.0, 800.0],
+            [today, 1050.0, 920.0, 830.0],
+        ])
+        result = portfolio_engine.get_market_comparison(1080.0, 940.0, 850.0, _paths())
+        assert result["portfolio_change"] == 80.0    # 1080 - 1000
         assert result["voo_change"] == 40.0          # 940 - 900
         assert result["qqq_change"] == 50.0          # 850 - 800
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_market_open_uses_price_history_when_daily_values_stale(self, mock_price, mock_open):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 1.0)
+        portfolio_engine.sync(_paths())
+        self._write_daily_values([
+            ["2025-01-02", 100.0, 100.0, 100.0],
+            ["2025-01-03", 105.0, 104.0, 103.0],
+        ])
+        prices = pd.DataFrame(
+            {
+                "MSFT": [100.0, 110.0],
+                "VOO": [500.0, 550.0],
+                "QQQ": [400.0, 440.0],
+            },
+            index=pd.to_datetime(["2025-01-02", "2025-01-06"]),
+        )
+        prices.to_csv(_paths()["price_history"])
+        result = portfolio_engine.get_market_comparison(112.0, 113.0, 114.0, _paths())
+        assert result["portfolio_change"] == 2.0     # 112 - 110 from price history
+        assert result["voo_change"] == 3.0           # 113 - (0.2 * 550)
+        assert result["qqq_change"] == 4.0           # 114 - (0.25 * 440)
 
     def test_returns_none_when_insufficient_data(self):
         self._write_daily_values = None  # no file

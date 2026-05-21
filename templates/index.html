@@ -97,7 +97,6 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         </form>
         {% endif %}
         <span id="freshness">{% if last_updated %}{{ last_updated }}{% else %}Not refreshed yet{% endif %}</span>
-        <button class="refresh-btn" id="refresh-btn" onclick="refreshData()">🔄 Refresh</button>
         <span id="refresh-status"></span>
     </div>
 </div>
@@ -444,19 +443,37 @@ document.querySelectorAll("table.auto-sort").forEach(function(table) {
 });
 
 function refreshData() {
-    var btn = document.getElementById("refresh-btn");
     var status = document.getElementById("refresh-status");
-    btn.disabled = true;
     status.textContent = "Refreshing…";
     fetch("/refresh?portfolio={{ portfolio_id }}")
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.status === "ok") { status.textContent = "Done!"; setTimeout(function() { location.reload(); }, 500); }
-            else if (data.status === "incomplete") { status.textContent = "Partial: " + (data.failed_tickers||[]).join(", "); btn.disabled = false; }
-            else { status.textContent = "Error: " + data.message; btn.disabled = false; }
+            if (data.status === "ok") {
+                status.textContent = "Updated. Reloading…";
+                setTimeout(function() {
+                    var url = new URL(window.location.href);
+                    url.searchParams.set("auto_refreshed", "1");
+                    window.location.replace(url.toString());
+                }, 500);
+            }
+            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.failed_tickers||[]).join(", "); }
+            else { status.textContent = "Refresh failed: " + data.message; }
         })
-        .catch(function(e) { status.textContent = "Error: " + e; btn.disabled = false; });
+        .catch(function(e) { status.textContent = "Refresh failed: " + e; });
 }
+
+(function() {
+    var autoRefresh = {{ auto_refresh|tojson }};
+    if (!autoRefresh) return;
+    var url = new URL(window.location.href);
+    if (url.searchParams.get("auto_refreshed") === "1") {
+        url.searchParams.delete("auto_refreshed");
+        window.history.replaceState({}, "", url.toString());
+        return;
+    }
+    document.getElementById("refresh-status").textContent = "Fetching latest prices…";
+    refreshData();
+})();
 </script>
 </body>
 </html>

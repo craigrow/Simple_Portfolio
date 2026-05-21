@@ -214,15 +214,27 @@ class TestPortfolioViewRendering:
 
 
 class TestStaleDataBanner:
-    def test_shows_refresh_button_when_stale(self, client):
+    def test_removes_manual_refresh_button(self, client):
         resp = client.get("/?portfolio=test_portfolio")
-        assert b"Refresh" in resp.data
+        assert b'id="refresh-btn"' not in resp.data
+        assert b'id="refresh-status"' in resp.data
 
     def test_shows_freshness_message(self, client):
         from datetime import date
         portfolio_engine._set_last_updated(_paths(), date(2025, 6, 15))
         resp = client.get("/?portfolio=test_portfolio")
         assert b"Prices as of" in resp.data
+
+    def test_auto_refresh_script_enabled_when_stale(self, client):
+        with patch.object(portfolio_engine, "should_auto_refresh", return_value=True):
+            resp = client.get("/?portfolio=test_portfolio")
+        assert b"var autoRefresh = true" in resp.data
+        assert b"Fetching latest prices" in resp.data
+
+    def test_auto_refresh_script_disabled_when_fresh(self, client):
+        with patch.object(portfolio_engine, "should_auto_refresh", return_value=False):
+            resp = client.get("/?portfolio=test_portfolio")
+        assert b"var autoRefresh = false" in resp.data
 
 
 class TestCurrentPriceLookup:
