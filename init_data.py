@@ -9,13 +9,13 @@ DST = os.environ.get("PORTFOLIOS_DIR", "/data/portfolios")
 
 
 def sync_transaction_files(src, dst):
-    """Copy repo transaction files into an existing portfolio data directory."""
+    """Copy repo portfolio definition files into the persistent data directory."""
     import glob
-    for txn in glob.glob(os.path.join(src, "*/transactions.csv")):
-        dst_txn = os.path.join(dst, os.path.relpath(txn, src))
-        os.makedirs(os.path.dirname(dst_txn), exist_ok=True)
-        shutil.copy2(txn, dst_txn)
-        print(f"Updated {dst_txn}")
+    for path in glob.glob(os.path.join(src, "*", "*.csv")) + glob.glob(os.path.join(src, "*", "config.json")):
+        dst_path = os.path.join(dst, os.path.relpath(path, src))
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        shutil.copy2(path, dst_path)
+        print(f"Updated {dst_path}")
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
         shutil.copytree(SRC, DST, dirs_exist_ok=True)
         print("Done copying.")
     else:
-        # Always sync transactions.csv from repo so new purchases appear on deploy
+        # Always sync repo-defined portfolio files so new portfolios and purchases appear on deploy
         sync_transaction_files(SRC, DST)
 
     # Ensure derived CSVs exist (portfolio.csv, shadows, prices)
