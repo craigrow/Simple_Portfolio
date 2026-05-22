@@ -165,6 +165,21 @@ class TestRefreshRoute:
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "ok"
 
+    def test_refresh_all_portfolios(self, client, tmp_path):
+        second = tmp_path / "portfolios" / "second_portfolio"
+        second.mkdir(parents=True)
+        with open(second / "config.json", "w") as f:
+            json.dump({"name": "Second Portfolio"}, f)
+
+        with patch.object(portfolio_engine, "refresh_data", return_value={"status": "ok"}) as refresh_data:
+            resp = client.get("/refresh?all=1")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+        assert refresh_data.call_count == 2
+        assert set(data["results"]) == {"test_portfolio", "second_portfolio"}
+
 
 class TestPortfolioViewRendering:
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
@@ -230,6 +245,7 @@ class TestStaleDataBanner:
             resp = client.get("/?portfolio=test_portfolio")
         assert b"var autoRefresh = true" in resp.data
         assert b"Fetching latest prices" in resp.data
+        assert b"/refresh?all=1" in resp.data
 
     def test_auto_refresh_script_disabled_when_fresh(self, client):
         with patch.object(portfolio_engine, "should_auto_refresh", return_value=False):

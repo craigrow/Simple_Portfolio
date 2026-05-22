@@ -6,6 +6,34 @@ import portfolio_engine
 app = Flask(__name__)
 
 
+def _refresh_all_portfolios(portfolios):
+    results = {}
+    failed = []
+    incomplete = []
+    for pid, _ in portfolios:
+        result = portfolio_engine.refresh_data(portfolio_engine.get_paths(pid))
+        results[pid] = result
+        status = result.get("status")
+        if status == "error":
+            failed.append(pid)
+        elif status != "ok":
+            incomplete.append(pid)
+
+    if failed:
+        return {
+            "status": "error",
+            "message": "Refresh failed for: " + ", ".join(failed),
+            "results": results,
+        }
+    if incomplete:
+        return {
+            "status": "incomplete",
+            "message": "Refresh incomplete for: " + ", ".join(incomplete),
+            "results": results,
+        }
+    return {"status": "ok", "message": "All portfolios refreshed", "results": results}
+
+
 @app.route("/")
 def index():
     portfolios = portfolio_engine.list_portfolios()
@@ -103,6 +131,8 @@ def refresh():
         portfolios = portfolio_engine.list_portfolios()
         if not portfolios:
             return jsonify({"status": "ok", "message": "No portfolios"})
+        if request.args.get("all") == "1":
+            return jsonify(_refresh_all_portfolios(portfolios))
         if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
             portfolio_id = portfolios[0][0]
         paths = portfolio_engine.get_paths(portfolio_id)

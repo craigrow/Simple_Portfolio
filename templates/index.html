@@ -442,10 +442,11 @@ document.querySelectorAll("table.auto-sort").forEach(function(table) {
     });
 });
 
-function refreshData() {
+function refreshData(refreshAll) {
     var status = document.getElementById("refresh-status");
     status.textContent = "Refreshing…";
-    fetch("/refresh?portfolio={{ portfolio_id }}")
+    var refreshUrl = refreshAll ? "/refresh?all=1" : "/refresh?portfolio={{ portfolio_id }}";
+    fetch(refreshUrl)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.status === "ok") {
@@ -472,7 +473,7 @@ function refreshData() {
         return;
     }
     document.getElementById("refresh-status").textContent = "Fetching latest prices…";
-    refreshData();
+    refreshData(true);
 })();
 </script>
 </body>

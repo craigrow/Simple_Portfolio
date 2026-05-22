@@ -95,6 +95,20 @@ class TestListPortfolios:
         assert len(result) == 2
         assert result[0][0] == "another"  # alphabetical
 
+    def test_foolish_portfolio_lists_first(self):
+        foolish = os.path.join(portfolio_engine.PORTFOLIOS_DIR, "foolish_portfolio")
+        crypto = os.path.join(portfolio_engine.PORTFOLIOS_DIR, "crypto_portfolio")
+        os.makedirs(foolish)
+        os.makedirs(crypto)
+        with open(os.path.join(foolish, "config.json"), "w") as f:
+            json.dump({"name": "Foolish Portfolio"}, f)
+        with open(os.path.join(crypto, "config.json"), "w") as f:
+            json.dump({"name": "Crypto Portfolio"}, f)
+
+        result = portfolio_engine.list_portfolios()
+
+        assert result[0] == ("foolish_portfolio", "Foolish Portfolio")
+
 
 class TestReadCsv:
     def test_creates_file_if_missing(self):

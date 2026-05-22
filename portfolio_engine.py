@@ -10,6 +10,7 @@ BASE_DIR = os.path.dirname(__file__)
 PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfolios"))
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
+DEFAULT_PORTFOLIO_ID = "foolish_portfolio"
 
 
 def get_paths(portfolio_id):
@@ -33,11 +34,12 @@ def get_paths(portfolio_id):
 
 
 def list_portfolios():
-    """Return list of (portfolio_id, display_name) tuples, sorted alphabetically."""
+    """Return list of (portfolio_id, display_name) tuples, with the default first."""
     if not os.path.isdir(PORTFOLIOS_DIR):
         return []
     result = []
-    for name in sorted(os.listdir(PORTFOLIOS_DIR)):
+    portfolio_ids = sorted(os.listdir(PORTFOLIOS_DIR), key=lambda name: (name != DEFAULT_PORTFOLIO_ID, name))
+    for name in portfolio_ids:
         config_path = os.path.join(PORTFOLIOS_DIR, name, "config.json")
         if os.path.isfile(config_path):
             with open(config_path) as f:
