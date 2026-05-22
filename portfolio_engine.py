@@ -11,6 +11,10 @@ PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfo
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
 DEFAULT_PORTFOLIO_ID = "foolish_portfolio"
+BENCHMARK_SHADOW_PATHS = {
+    "VOO": "shadow_voo",
+    "QQQ": "shadow_qqq",
+}
 
 
 def get_paths(portfolio_id):
@@ -57,6 +61,13 @@ def _ensure_file(path):
 
 def read_csv(path):
     _ensure_file(path)
+    return pd.read_csv(path)
+
+
+def _read_existing_csv(path, columns=None):
+    """Read a CSV without creating it; used by read-only reporting paths."""
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=columns or [])
     return pd.read_csv(path)
 
 
@@ -981,6 +992,149 @@ def get_gainers_losers(portfolio_summary_data, paths, n=5):
     by_dollar = sorted(changes, key=lambda x: x["CHANGE"], reverse=True)
     by_pct = sorted(changes, key=lambda x: x["PCT"], reverse=True)
     return by_dollar[:n], by_dollar[-n:][::-1], by_pct[:n], by_pct[-n:][::-1]
+
+
+def _empty_baseball_stats(benchmark, integrity_ok=True, message=None):
+    return {
+        "benchmark": benchmark,
+        "batting_average": None,
+        "slugging_percentage": None,
+        "daily_win_percentage": None,
+        "counts": {
+            "transaction_wins": 0,
+            "transaction_losses": 0,
+            "transaction_ties": 0,
+            "slugging_bases": 0,
+            "slugging_transactions": 0,
+            "daily_wins": 0,
+            "daily_losses": 0,
+            "daily_ties": 0,
+        },
+        "integrity": {
+            "ok": integrity_ok,
+            "message": message,
+        },
+    }
+
+
+def _cached_current_prices(paths, *portfolios):
+    if not os.path.exists(paths["price_history"]):
+        return {}
+    prices_df = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    if prices_df.empty:
+        return {}
+    tickers = set()
+    for portfolio_df in portfolios:
+        if not portfolio_df.empty and "TICKER" in portfolio_df.columns:
+            tickers.update(portfolio_df["TICKER"].dropna().astype(str))
+    current_prices = {}
+    for ticker in tickers:
+        if ticker in prices_df.columns:
+            last_idx = prices_df[ticker].last_valid_index()
+            if last_idx is not None:
+                current_prices[ticker] = round(float(prices_df[ticker].loc[last_idx]), 2)
+    return current_prices
+
+
+def _baseball_batting_and_slugging(paths, benchmark, main_df, benchmark_df):
+    stats = _empty_baseball_stats(benchmark)
+    if main_df.empty:
+        return stats
+    if len(main_df) != len(benchmark_df):
+        stats["integrity"] = {
+            "ok": False,
+            "message": (
+                f"{benchmark} shadow row count ({len(benchmark_df)}) does not match "
+                f"portfolio row count ({len(main_df)})."
+            ),
+        }
+        return stats
+
+    splits_df = _read_splits(paths)
+    dividends_df = _read_dividends(paths)
+    current_prices = _cached_current_prices(paths, main_df, benchmark_df)
+    main_enriched, _, _ = enrich_portfolio(main_df, splits_df, dividends_df, current_prices)
+    benchmark_enriched, _, _ = enrich_portfolio(benchmark_df, splits_df, dividends_df, current_prices)
+
+    wins = losses = ties = 0
+    bases = 0
+    for idx in range(len(main_enriched)):
+        main_return = float(main_enriched.iloc[idx]["TOTAL_RETURN"]) - float(main_enriched.iloc[idx]["TOTAL_VALUE"])
+        benchmark_return = float(benchmark_enriched.iloc[idx]["TOTAL_RETURN"]) - float(benchmark_enriched.iloc[idx]["TOTAL_VALUE"])
+        if main_return > benchmark_return:
+            wins += 1
+        elif main_return < benchmark_return:
+            losses += 1
+        else:
+            ties += 1
+
+        invested = float(main_enriched.iloc[idx]["TOTAL_VALUE"])
+        if invested > 0:
+            multiple = float(main_enriched.iloc[idx]["TOTAL_RETURN"]) / invested
+            bases += max(0, int(multiple) - 1)
+
+    denominator = wins + losses
+    stats["batting_average"] = round(wins / denominator, 4) if denominator else None
+    stats["slugging_percentage"] = round(bases / len(main_enriched), 4) if len(main_enriched) else None
+    stats["counts"].update({
+        "transaction_wins": wins,
+        "transaction_losses": losses,
+        "transaction_ties": ties,
+        "slugging_bases": bases,
+        "slugging_transactions": len(main_enriched),
+    })
+    return stats
+
+
+def _baseball_daily_win_percentage(paths, benchmark, main_df, benchmark_df):
+    if main_df.empty or benchmark_df.empty or not os.path.exists(paths["price_history"]):
+        return None, {"daily_wins": 0, "daily_losses": 0, "daily_ties": 0}
+
+    prices_df = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    if prices_df.empty:
+        return None, {"daily_wins": 0, "daily_losses": 0, "daily_ties": 0}
+
+    earliest = pd.to_datetime(main_df["DATE"]).min()
+    prices_df = prices_df.loc[earliest:]
+    if prices_df.empty:
+        return None, {"daily_wins": 0, "daily_losses": 0, "daily_ties": 0}
+
+    splits_df = _read_splits(paths)
+    empty_dividends = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+    main_values = _vectorized_portfolio_values(main_df, splits_df, empty_dividends, prices_df)
+    benchmark_values = _vectorized_portfolio_values(benchmark_df, splits_df, empty_dividends, prices_df)
+
+    main_pct = main_values.pct_change()
+    benchmark_pct = benchmark_values.pct_change()
+    valid = main_pct.notna() & benchmark_pct.notna()
+    valid &= main_values.shift(1).fillna(0) > 0
+    valid &= benchmark_values.shift(1).fillna(0) > 0
+
+    wins = int((main_pct[valid] > benchmark_pct[valid]).sum())
+    losses = int((main_pct[valid] < benchmark_pct[valid]).sum())
+    ties = int((main_pct[valid] == benchmark_pct[valid]).sum())
+    denominator = wins + losses
+    value = round(wins / denominator, 4) if denominator else None
+    return value, {"daily_wins": wins, "daily_losses": losses, "daily_ties": ties}
+
+
+def get_baseball_stats(paths, benchmark="VOO"):
+    """Return read-only baseball-style stats for a portfolio against a benchmark."""
+    if benchmark not in BENCHMARK_SHADOW_PATHS:
+        return _empty_baseball_stats(benchmark, integrity_ok=False, message=f"Unsupported benchmark: {benchmark}")
+
+    main_df = _read_existing_csv(paths["portfolio"], COLUMNS)
+    benchmark_key = BENCHMARK_SHADOW_PATHS[benchmark]
+    benchmark_df = _read_existing_csv(paths[benchmark_key], COLUMNS)
+
+    stats = _baseball_batting_and_slugging(paths, benchmark, main_df, benchmark_df)
+    if not stats["integrity"]["ok"]:
+        return stats
+
+    daily_value, daily_counts = _baseball_daily_win_percentage(paths, benchmark, main_df, benchmark_df)
+    stats["daily_win_percentage"] = daily_value
+    stats["counts"].update(daily_counts)
+    return stats
 
 
 def refresh_data(paths):

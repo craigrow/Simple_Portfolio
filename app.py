@@ -123,6 +123,33 @@ def index():
     )
 
 
+@app.route("/stats")
+def stats():
+    portfolios = portfolio_engine.list_portfolios()
+    portfolio_id = request.args.get("portfolio")
+    if portfolios and (not portfolio_id or portfolio_id not in [p[0] for p in portfolios]):
+        portfolio_id = portfolios[0][0]
+
+    portfolio_name = None
+    stats_result = None
+    stats_error = None
+    if portfolios:
+        portfolio_name = next(n for pid, n in portfolios if pid == portfolio_id)
+        try:
+            stats_result = portfolio_engine.get_baseball_stats(portfolio_engine.get_paths(portfolio_id), benchmark="VOO")
+        except Exception as e:
+            stats_error = str(e)
+
+    return render_template(
+        "stats.html",
+        portfolios=portfolios,
+        portfolio_id=portfolio_id,
+        portfolio_name=portfolio_name,
+        stats=stats_result,
+        stats_error=stats_error,
+    )
+
+
 @app.route("/refresh")
 def refresh():
     """Trigger data refresh — called by the Refresh button."""
