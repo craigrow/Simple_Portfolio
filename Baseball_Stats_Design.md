@@ -137,6 +137,66 @@ len(portfolio.csv) == len(shadow_qqq.csv)
 
 If a mismatch is found, the stats page should show a clear warning that identifies the affected portfolio and benchmark. The engine should expose enough detail to debug the issue, such as row counts and possibly the first missing transaction index.
 
+## Safety and Failure Isolation
+
+The baseball stats feature has a lower criticality than the main portfolio dashboard and a much lower criticality than portfolio data integrity. The design must preserve that risk hierarchy:
+
+1. Portfolio data corruption is a disaster.
+2. Main dashboard failure is a serious outage.
+3. Baseball stats failure is undesirable but tolerable.
+
+The implementation must therefore isolate baseball stats from both the main dashboard and write paths.
+
+### Read-Only Requirement
+
+Baseball stats calculations must be read-only.
+
+Stats code may read:
+
+- `portfolio.csv`
+- `shadow_voo.csv`
+- `shadow_qqq.csv`
+- `daily_values.csv`
+- `splits.csv`
+- `dividends.csv`
+- `price_history.csv`
+
+Stats code must not write:
+
+- `transactions.csv`
+- `portfolio.csv`
+- `shadow_voo.csv`
+- `shadow_qqq.csv`
+- `daily_values.csv`
+- `splits.csv`
+- `dividends.csv`
+- `price_history.csv`
+- `last_updated.txt`
+
+Stats code must not call:
+
+- `sync()`
+- `refresh_data()`
+- `update_prices()`
+- `compute_daily_values()`
+- yfinance or any other market-data API
+
+The stats page should use cached portfolio data only. If cached data is missing or stale, the stats page may show an unavailable/incomplete message, but it should not refresh or repair data.
+
+### Route Isolation
+
+Baseball stats should live on `/stats`, not `/`.
+
+The main dashboard route must not depend on `get_baseball_stats()` or any stats-specific computation. A stats bug should not be able to break the main dashboard page.
+
+Stats errors should be caught inside the `/stats` route and rendered as a stats-specific warning. The route should avoid returning a generic server error for ordinary stats calculation failures such as missing cached chart data or benchmark integrity mismatches.
+
+### Data Integrity Warnings Are Not Repairs
+
+Missing benchmark shadow rows are serious and should be reported clearly, but the stats feature must not attempt automatic repair. Repair belongs in existing sync/refresh workflows or a future explicit data-integrity maintenance tool.
+
+The stats page can say that stats are unavailable because portfolio data failed validation. It should not mutate files to make the validation pass.
+
 ## Engine Design
 
 Add stats calculation functions to `portfolio_engine.py`. Keep the calculations independent from Flask rendering.
@@ -280,6 +340,10 @@ Add focused tests for:
 8. Daily win percentage excludes ties from the denominator.
 9. Missing benchmark shadow rows are reported as a data integrity issue.
 10. `/stats?portfolio=<id>` renders the selected portfolio stats without cluttering `/`.
+11. `/` still renders if baseball stats calculation raises an exception.
+12. `/stats` catches baseball stats calculation errors and renders a stats-specific warning.
+13. Baseball stats functions do not write to portfolio, shadow, price, dividend, split, daily value, transaction, or last-updated files.
+14. Baseball stats functions do not call sync, refresh, price update, daily-value recompute, or external market-data APIs.
 
 ## Future Work
 
