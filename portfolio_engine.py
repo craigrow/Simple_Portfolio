@@ -104,9 +104,59 @@ def get_new_transactions(paths):
     return txn.iloc[processed_count:]
 
 
+def _processed_rows_from_transactions(transactions):
+    rows = []
+    for _, row in transactions.iterrows():
+        date_str = str(row["DATE"])
+        ticker = str(row["TICKER"])
+        price = float(row["PURCHASE_PRICE"])
+        shares = round(float(row["SHARES_PURCHASED"]), 5)
+        total = round(price * shares, 2)
+        rows.append([date_str, ticker, price, shares, total])
+    return pd.DataFrame(rows, columns=COLUMNS)
+
+
+def _portfolio_rows_match_transactions(portfolio, expected):
+    if len(portfolio) != len(expected):
+        return False
+    if portfolio.empty and expected.empty:
+        return True
+    current = portfolio[COLUMNS].copy()
+    current["DATE"] = current["DATE"].astype(str)
+    current["TICKER"] = current["TICKER"].astype(str)
+    expected = expected.copy()
+    expected["DATE"] = expected["DATE"].astype(str)
+    expected["TICKER"] = expected["TICKER"].astype(str)
+    for col in ["PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]:
+        current[col] = current[col].astype(float).round(5)
+        expected[col] = expected[col].astype(float).round(5)
+    return current.reset_index(drop=True).equals(expected.reset_index(drop=True))
+
+
+def _invalidate_daily_values(paths):
+    for path in [paths["daily_values"], paths["daily_values"] + ".meta"]:
+        if os.path.exists(path):
+            os.remove(path)
+
+
 def sync(paths):
     """Process new transactions and update portfolio + shadow files."""
-    new = get_new_transactions(paths)
+    txn = pd.read_csv(paths["transactions"])
+    portfolio = read_csv(paths["portfolio"])
+    if not portfolio.empty:
+        processed_count = min(len(portfolio), len(txn))
+        expected = _processed_rows_from_transactions(txn.iloc[:processed_count])
+        current = portfolio.iloc[:processed_count]
+        if len(portfolio) > len(txn) or not _portfolio_rows_match_transactions(current, expected):
+            expected = _processed_rows_from_transactions(txn.iloc[:processed_count])
+            expected.to_csv(paths["portfolio"], index=False)
+            _invalidate_daily_values(paths)
+            portfolio = expected
+
+    if portfolio.empty:
+        new = txn
+    else:
+        new = txn.iloc[len(portfolio):]
     if new.empty:
         return 0
 

@@ -199,6 +199,27 @@ class TestSync:
         portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
         assert portfolio.iloc[0]["SHARES_PURCHASED"] == 3.14159
 
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_sync_repairs_changed_processed_transaction(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        with open(_paths()["transactions"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED"])
+            writer.writerow(["2025-01-02", "AAPL", 100.0, 10.0])
+        with open(_paths()["daily_values"], "w") as f:
+            f.write("DATE,MAIN,VOO,QQQ\n2025-01-02,1,1,1\n")
+        with open(_paths()["daily_values"] + ".meta", "w") as f:
+            f.write("3")
+
+        count = portfolio_engine.sync(_paths())
+
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        assert count == 0
+        assert portfolio.iloc[0]["TICKER"] == "AAPL"
+        assert not os.path.exists(_paths()["daily_values"])
+        assert not os.path.exists(_paths()["daily_values"] + ".meta")
+
 
 class TestShadowMissingPrice:
     def test_shadow_skipped_when_price_unavailable(self):
