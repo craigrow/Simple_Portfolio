@@ -1106,6 +1106,10 @@ class TestBaseballStats:
         assert stats["integrity"]["ok"] is True
         assert stats["batting_average"] == 1.0
         assert stats["slugging_percentage"] == 2.0
+        assert stats["slugging_buckets"] == [
+            {"bases": 1, "count": 1, "tickers": ["MSFT"]},
+            {"bases": 3, "count": 1, "tickers": ["AAPL"]},
+        ]
         assert stats["counts"]["transaction_wins"] == 2
         assert stats["counts"]["slugging_bases"] == 4
 

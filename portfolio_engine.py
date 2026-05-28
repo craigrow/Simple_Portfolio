@@ -999,6 +999,7 @@ def _empty_baseball_stats(benchmark, integrity_ok=True, message=None):
         "benchmark": benchmark,
         "batting_average": None,
         "slugging_percentage": None,
+        "slugging_buckets": [],
         "daily_win_percentage": None,
         "counts": {
             "transaction_wins": 0,
@@ -1058,6 +1059,7 @@ def _baseball_batting_and_slugging(paths, benchmark, main_df, benchmark_df):
 
     wins = losses = ties = 0
     bases = 0
+    bucket_map = {}
     for idx in range(len(main_enriched)):
         main_return = float(main_enriched.iloc[idx]["TOTAL_RETURN"]) - float(main_enriched.iloc[idx]["TOTAL_VALUE"])
         benchmark_return = float(benchmark_enriched.iloc[idx]["TOTAL_RETURN"]) - float(benchmark_enriched.iloc[idx]["TOTAL_VALUE"])
@@ -1071,11 +1073,19 @@ def _baseball_batting_and_slugging(paths, benchmark, main_df, benchmark_df):
         invested = float(main_enriched.iloc[idx]["TOTAL_VALUE"])
         if invested > 0:
             multiple = float(main_enriched.iloc[idx]["TOTAL_RETURN"]) / invested
-            bases += max(0, int(multiple) - 1)
+            row_bases = max(0, int(multiple) - 1)
+            bases += row_bases
+            if row_bases > 0:
+                bucket = bucket_map.setdefault(row_bases, {"bases": row_bases, "count": 0, "tickers": []})
+                bucket["count"] += 1
+                ticker = str(main_enriched.iloc[idx]["TICKER"])
+                if ticker not in bucket["tickers"]:
+                    bucket["tickers"].append(ticker)
 
     denominator = wins + losses
     stats["batting_average"] = round(wins / denominator, 4) if denominator else None
     stats["slugging_percentage"] = round(bases / len(main_enriched), 4) if len(main_enriched) else None
+    stats["slugging_buckets"] = [bucket_map[key] for key in sorted(bucket_map)]
     stats["counts"].update({
         "transaction_wins": wins,
         "transaction_losses": losses,

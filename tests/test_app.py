@@ -187,6 +187,10 @@ class TestStatsRoute:
             "benchmark": "VOO",
             "batting_average": 1.0,
             "slugging_percentage": 2.0,
+            "slugging_buckets": [
+                {"bases": 1, "count": 2, "tickers": ["MSFT", "AAPL"]},
+                {"bases": 4, "count": 4, "tickers": ["NVDA", "TSLA", "SHOP", "MELI"]},
+            ],
             "daily_win_percentage": 0.5,
             "counts": {
                 "transaction_wins": 2,
@@ -208,6 +212,10 @@ class TestStatsRoute:
         assert b"Test Portfolio" in resp.data
         assert b"Batting Average" in resp.data
         assert b"1.000" in resp.data
+        assert b"1-baggers" in resp.data
+        assert b"MSFT, AAPL" in resp.data
+        assert b"4-baggers" in resp.data
+        assert b"NVDA" not in resp.data
 
     def test_stats_route_catches_stats_errors(self, client):
         with patch.object(portfolio_engine, "get_baseball_stats", side_effect=RuntimeError("stats boom")):
