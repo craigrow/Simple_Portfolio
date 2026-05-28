@@ -1071,3 +1071,117 @@ class TestGetGainersLosers:
         assert len(l) == 3
         assert len(pg) == 3
         assert len(pl) == 3
+
+
+class TestBaseballStats:
+    def _write_processed(self, path, rows):
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(portfolio_engine.COLUMNS)
+            writer.writerows(rows)
+
+    def test_batting_average_and_slugging_include_dividends(self):
+        self._write_processed(_paths()["portfolio"], [
+            ["2025-01-02", "MSFT", 100.0, 1.0, 100.0],
+            ["2025-01-02", "AAPL", 100.0, 1.0, 100.0],
+        ])
+        self._write_processed(_paths()["shadow_voo"], [
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+        ])
+        prices = pd.DataFrame({
+            "MSFT": [110.0],
+            "AAPL": [410.0],
+            "VOO": [120.0],
+        }, index=pd.to_datetime(["2025-01-03"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        with open(_paths()["dividends"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "AMOUNT"])
+            writer.writerow(["MSFT", "2025-01-03", 120.0])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["integrity"]["ok"] is True
+        assert stats["batting_average"] == 1.0
+        assert stats["slugging_percentage"] == 2.0
+        assert stats["slugging_buckets"] == [
+            {"bases": 1, "count": 1, "tickers": ["MSFT"]},
+            {"bases": 3, "count": 1, "tickers": ["AAPL"]},
+        ]
+        assert stats["counts"]["transaction_wins"] == 2
+        assert stats["counts"]["slugging_bases"] == 4
+
+    def test_batting_average_excludes_ties(self):
+        self._write_processed(_paths()["portfolio"], [
+            ["2025-01-02", "MSFT", 100.0, 1.0, 100.0],
+            ["2025-01-02", "AAPL", 100.0, 1.0, 100.0],
+        ])
+        self._write_processed(_paths()["shadow_voo"], [
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+        ])
+        prices = pd.DataFrame({
+            "MSFT": [110.0],
+            "AAPL": [100.0],
+            "VOO": [100.0],
+        }, index=pd.to_datetime(["2025-01-03"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["batting_average"] == 1.0
+        assert stats["counts"]["transaction_wins"] == 1
+        assert stats["counts"]["transaction_losses"] == 0
+        assert stats["counts"]["transaction_ties"] == 1
+
+    def test_daily_win_percentage_uses_daily_change_and_excludes_dividends(self):
+        self._write_processed(_paths()["portfolio"], [["2025-01-02", "MSFT", 100.0, 1.0, 100.0]])
+        self._write_processed(_paths()["shadow_voo"], [["2025-01-02", "VOO", 100.0, 1.0, 100.0]])
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 110.0, 99.0],
+            "VOO": [100.0, 105.0, 105.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        with open(_paths()["dividends"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "AMOUNT"])
+            writer.writerow(["MSFT", "2025-01-06", 1000.0])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["daily_win_percentage"] == 0.5
+        assert stats["counts"]["daily_wins"] == 1
+        assert stats["counts"]["daily_losses"] == 1
+        assert stats["counts"]["daily_ties"] == 0
+
+    def test_missing_shadow_rows_report_integrity_issue(self):
+        self._write_processed(_paths()["portfolio"], [
+            ["2025-01-02", "MSFT", 100.0, 1.0, 100.0],
+            ["2025-01-03", "AAPL", 100.0, 1.0, 100.0],
+        ])
+        self._write_processed(_paths()["shadow_voo"], [["2025-01-02", "VOO", 100.0, 1.0, 100.0]])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["integrity"]["ok"] is False
+        assert "does not match" in stats["integrity"]["message"]
+
+    def test_baseball_stats_do_not_call_write_or_refresh_paths(self):
+        self._write_processed(_paths()["portfolio"], [["2025-01-02", "MSFT", 100.0, 1.0, 100.0]])
+        self._write_processed(_paths()["shadow_voo"], [["2025-01-02", "VOO", 100.0, 1.0, 100.0]])
+        prices = pd.DataFrame({"MSFT": [100.0], "VOO": [100.0]}, index=pd.to_datetime(["2025-01-02"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+
+        with patch.object(portfolio_engine, "sync", side_effect=AssertionError("sync called")), \
+             patch.object(portfolio_engine, "refresh_data", side_effect=AssertionError("refresh called")), \
+             patch.object(portfolio_engine, "update_prices", side_effect=AssertionError("update called")), \
+             patch.object(portfolio_engine, "compute_daily_values", side_effect=AssertionError("compute called")), \
+             patch.object(portfolio_engine, "_fetch_current_prices", side_effect=AssertionError("fetch called")):
+            stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["integrity"]["ok"] is True

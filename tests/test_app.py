@@ -181,6 +181,58 @@ class TestRefreshRoute:
         assert set(data["results"]) == {"test_portfolio", "second_portfolio"}
 
 
+class TestStatsRoute:
+    def test_stats_route_renders_selected_portfolio(self, client):
+        stats = {
+            "benchmark": "VOO",
+            "batting_average": 1.0,
+            "slugging_percentage": 2.0,
+            "slugging_buckets": [
+                {"bases": 1, "count": 2, "tickers": ["MSFT", "AAPL"]},
+                {"bases": 4, "count": 4, "tickers": ["NVDA", "TSLA", "SHOP", "MELI"]},
+            ],
+            "daily_win_percentage": 0.5,
+            "counts": {
+                "transaction_wins": 2,
+                "transaction_losses": 0,
+                "transaction_ties": 0,
+                "slugging_bases": 4,
+                "slugging_transactions": 2,
+                "daily_wins": 1,
+                "daily_losses": 1,
+                "daily_ties": 0,
+            },
+            "integrity": {"ok": True, "message": None},
+        }
+        with patch.object(portfolio_engine, "get_baseball_stats", return_value=stats):
+            resp = client.get("/stats?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Portfolio Stats" in resp.data
+        assert b"Test Portfolio" in resp.data
+        assert b"Batting Average" in resp.data
+        assert b"1.000" in resp.data
+        assert b"1-baggers" in resp.data
+        assert b"MSFT, AAPL" in resp.data
+        assert b"4-baggers" in resp.data
+        assert b"NVDA" not in resp.data
+
+    def test_stats_route_catches_stats_errors(self, client):
+        with patch.object(portfolio_engine, "get_baseball_stats", side_effect=RuntimeError("stats boom")):
+            resp = client.get("/stats?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Baseball stats are unavailable" in resp.data
+        assert b"stats boom" in resp.data
+
+    def test_dashboard_does_not_depend_on_baseball_stats(self, client):
+        with patch.object(portfolio_engine, "get_baseball_stats", side_effect=RuntimeError("stats boom")):
+            resp = client.get("/?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Baseball Stats" not in resp.data
+
+
 class TestPortfolioViewRendering:
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_portfolio_view_heading(self, mock_price, client):
