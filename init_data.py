@@ -3,6 +3,7 @@
 ensure derived CSVs (portfolio, shadows, prices) are generated."""
 import os
 import shutil
+import csv
 
 SRC = os.path.join(os.path.dirname(__file__), "portfolios")
 DST = os.environ.get("PORTFOLIOS_DIR", "/data/portfolios")
@@ -18,6 +19,27 @@ def sync_transaction_files(src, dst):
         print(f"Updated {dst_path}")
 
 
+def _csv_has_data_rows(path):
+    if not os.path.exists(path):
+        return False
+    with open(path, newline="") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        return any(row for row in reader)
+
+
+def seed_empty_derived_files(src, dst):
+    """Restore generated CSV caches from repo defaults only when persistent copies are empty."""
+    import glob
+    for path in glob.glob(os.path.join(src, "*", "data", "*.csv")):
+        dst_path = os.path.join(dst, os.path.relpath(path, src))
+        if _csv_has_data_rows(dst_path):
+            continue
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        shutil.copy2(path, dst_path)
+        print(f"Seeded empty derived file {dst_path}")
+
+
 def main():
     if not (os.path.exists(DST) and os.listdir(DST)):
         print(f"Copying {SRC} → {DST}")
@@ -26,6 +48,7 @@ def main():
     else:
         # Always sync repo-defined portfolio files so new portfolios and purchases appear on deploy
         sync_transaction_files(SRC, DST)
+        seed_empty_derived_files(SRC, DST)
 
     # Ensure derived CSVs exist (portfolio.csv, shadows, prices)
     os.environ["PORTFOLIOS_DIR"] = DST
