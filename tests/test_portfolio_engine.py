@@ -262,6 +262,24 @@ class TestShadowMissingPrice:
         assert voo.iloc[1]["DATE"] == "2025-01-03"
         assert qqq.iloc[1]["DATE"] == "2025-01-03"
 
+    def test_sync_uses_cached_prices_for_shadow_rows(self):
+        prices = pd.DataFrame(
+            {"VOO": [500.0], "QQQ": [400.0]},
+            index=pd.to_datetime(["2025-01-02"]),
+        )
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=RuntimeError("network down")):
+            count = portfolio_engine.sync(_paths())
+
+        assert count == 1
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert voo.iloc[0]["PURCHASE_PRICE"] == 500.0
+        assert qqq.iloc[0]["PURCHASE_PRICE"] == 400.0
+
 
 class TestMultipleTransactions:
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)

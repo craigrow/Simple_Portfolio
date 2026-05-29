@@ -52,8 +52,12 @@ def index():
     paths = portfolio_engine.get_paths(portfolio_id)
     portfolio_name = next(n for pid, n in portfolios if pid == portfolio_id)
 
-    # Sync any new transactions, then load cached data — no API calls
-    portfolio_engine.sync(paths)
+    # Sync any new transactions, then load cached data. If sync cannot repair
+    # derived data, keep the dashboard available with the last readable cache.
+    try:
+        portfolio_engine.sync(paths)
+    except Exception:
+        pass
     port_df, shadow_voo_df, shadow_qqq_df = portfolio_engine.load_all(paths)
     splits_df = portfolio_engine._read_splits(paths)
     dividends_df = portfolio_engine._read_dividends(paths)

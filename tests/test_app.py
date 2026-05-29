@@ -234,6 +234,13 @@ class TestStatsRoute:
         assert resp.status_code == 200
         assert b"Baseball Stats" not in resp.data
 
+    def test_dashboard_does_not_crash_when_sync_fails(self, client):
+        with patch.object(portfolio_engine, "sync", side_effect=RuntimeError("sync boom")):
+            resp = client.get("/?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Simple Portfolio Tracker" in resp.data
+
 
 class TestPortfolioViewRendering:
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)

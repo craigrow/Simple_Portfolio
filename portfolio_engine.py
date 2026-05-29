@@ -82,16 +82,36 @@ def _get_closing_price(ticker, date_str):
     return round(float(hist["Close"].iloc[0]), 2)
 
 
-def _build_shadow_row(date_str, shadow_ticker, total_value):
-    price = _get_closing_price(shadow_ticker, date_str)
+def _get_cached_closing_price(paths, ticker, date_str):
+    if not os.path.exists(paths["price_history"]):
+        return None
+    try:
+        prices = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    except Exception:
+        return None
+    if prices.empty or ticker not in prices.columns:
+        return None
+    target = pd.Timestamp(date_str).normalize()
+    normalized_index = pd.to_datetime(prices.index).normalize()
+    matches = prices.loc[normalized_index == target, ticker]
+    matches = matches.dropna()
+    if matches.empty:
+        return None
+    return round(float(matches.iloc[-1]), 2)
+
+
+def _build_shadow_row(date_str, shadow_ticker, total_value, paths=None):
+    price = _get_cached_closing_price(paths, shadow_ticker, date_str) if paths else None
+    if price is None:
+        price = _get_closing_price(shadow_ticker, date_str)
     if price is None:
         return None
     shares = round(total_value / price, 5)
     return [date_str, shadow_ticker, price, shares, round(price * shares, 2)]
 
 
-def _require_shadow_row(date_str, shadow_ticker, total_value):
-    row = _build_shadow_row(date_str, shadow_ticker, total_value)
+def _require_shadow_row(paths, date_str, shadow_ticker, total_value):
+    row = _build_shadow_row(date_str, shadow_ticker, total_value, paths)
     if row is None:
         raise RuntimeError(f"Could not fetch {shadow_ticker} close for {date_str}")
     return row
@@ -196,7 +216,7 @@ def _repair_trailing_shadow_rows(paths, portfolio):
 
         missing = portfolio.iloc[len(shadow):]
         rows = [
-            _require_shadow_row(str(row["DATE"]), shadow_ticker, float(row["TOTAL_VALUE"]))
+            _require_shadow_row(paths, str(row["DATE"]), shadow_ticker, float(row["TOTAL_VALUE"]))
             for _, row in missing.iterrows()
         ]
         _append_rows(paths[shadow_key], rows)
@@ -242,8 +262,8 @@ def sync(paths):
         total = round(price * shares, 2)
 
         portfolio_rows.append([date_str, ticker, price, shares, total])
-        voo_rows.append(_require_shadow_row(date_str, "VOO", total))
-        qqq_rows.append(_require_shadow_row(date_str, "QQQ", total))
+        voo_rows.append(_require_shadow_row(paths, date_str, "VOO", total))
+        qqq_rows.append(_require_shadow_row(paths, date_str, "QQQ", total))
 
     _append_rows(paths["portfolio"], portfolio_rows)
     _append_rows(paths["shadow_voo"], voo_rows)
