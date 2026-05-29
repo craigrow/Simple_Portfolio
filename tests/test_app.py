@@ -62,6 +62,8 @@ def _mock_closing_price(ticker, date_str):
     prices = {
         ("VOO", "2025-01-02"): 500.0,
         ("QQQ", "2025-01-02"): 400.0,
+        ("VOO", "2025-01-03"): 510.0,
+        ("QQQ", "2025-01-03"): 410.0,
     }
     return prices.get((ticker, date_str))
 
@@ -367,6 +369,7 @@ class TestMarketComparisonCard:
     def test_card_renders_when_data_available(self, mock_price, mock_open, client):
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        portfolio_engine.sync(_paths())
         dates = pd.date_range("2025-01-02", periods=1)
         prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
         prices.index.name = "Date"
@@ -392,6 +395,7 @@ class TestMarketComparisonCard:
     def test_positive_change_has_green_class(self, mock_price, mock_open, client):
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        portfolio_engine.sync(_paths())
         dates = pd.date_range("2025-01-02", periods=1)
         prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
         prices.index.name = "Date"
@@ -409,6 +413,7 @@ class TestMarketComparisonCard:
     def test_negative_change_has_red_class(self, mock_price, mock_open, client):
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        portfolio_engine.sync(_paths())
         dates = pd.date_range("2025-01-02", periods=1)
         prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
         prices.index.name = "Date"

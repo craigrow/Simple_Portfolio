@@ -222,19 +222,45 @@ class TestSync:
 
 
 class TestShadowMissingPrice:
-    def test_shadow_skipped_when_price_unavailable(self):
+    def test_sync_fails_without_partial_write_when_shadow_price_unavailable(self):
         def _no_prices(ticker, date_str):
             return None
 
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
         with patch.object(portfolio_engine, "_get_closing_price", side_effect=_no_prices):
-            portfolio_engine.sync(_paths())
+            with pytest.raises(RuntimeError, match="Could not fetch VOO close"):
+                portfolio_engine.sync(_paths())
         portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
-        assert len(portfolio) == 1
+        assert len(portfolio) == 0
         voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
         qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
         assert len(voo) == 0
         assert len(qqq) == 0
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_sync_repairs_trailing_missing_shadow_rows(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        _write_transaction("2025-01-03", "AAPL", 200.0, 5.0)
+
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        new_portfolio_row = pd.DataFrame(
+            [["2025-01-03", "AAPL", 200.0, 5.0, 1000.0]],
+            columns=portfolio_engine.COLUMNS,
+        )
+        pd.concat([portfolio, new_portfolio_row], ignore_index=True).to_csv(_paths()["portfolio"], index=False)
+
+        count = portfolio_engine.sync(_paths())
+
+        assert count == 0
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert len(portfolio) == 2
+        assert len(voo) == 2
+        assert len(qqq) == 2
+        assert voo.iloc[1]["DATE"] == "2025-01-03"
+        assert qqq.iloc[1]["DATE"] == "2025-01-03"
 
 
 class TestMultipleTransactions:
@@ -570,7 +596,8 @@ class TestPortfolioSummary:
 
 
 class TestUpdatePrices:
-    def test_cache_current_returns_ok(self):
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_cache_current_returns_ok(self, mock_price):
         """When cache already covers the last market close, skip fetch."""
         close_date = portfolio_engine._last_market_close()
         # Write a cache with data through close_date
@@ -645,8 +672,9 @@ class TestGetLastUpdated:
 
 
 class TestUpdatePricesDuplicateColumns:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     @patch.object(portfolio_engine, "_last_market_close")
-    def test_retry_frames_with_overlapping_columns(self, mock_close):
+    def test_retry_frames_with_overlapping_columns(self, mock_close, mock_price):
         """Retry loop producing overlapping DataFrames should not crash concat."""
         from datetime import date, timedelta
         mock_close.return_value = date(2025, 1, 10)
@@ -667,8 +695,9 @@ class TestUpdatePricesDuplicateColumns:
         assert cached.index.is_unique
         assert not cached.columns.duplicated().any()
 
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     @patch.object(portfolio_engine, "_last_market_close")
-    def test_cache_written_with_unique_index(self, mock_close):
+    def test_cache_written_with_unique_index(self, mock_close, mock_price):
         """After a full update cycle, price_history.csv should have no duplicate dates."""
         from datetime import date
         mock_close.return_value = date(2025, 1, 5)
