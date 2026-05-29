@@ -6,6 +6,7 @@ import shutil
 import csv
 
 SRC = os.path.join(os.path.dirname(__file__), "portfolios")
+SEED_SRC = os.path.join(os.path.dirname(__file__), "seed_data")
 DST = os.environ.get("PORTFOLIOS_DIR", "/data/portfolios")
 
 
@@ -48,7 +49,7 @@ def main():
     else:
         # Always sync repo-defined portfolio files so new portfolios and purchases appear on deploy
         sync_transaction_files(SRC, DST)
-        seed_empty_derived_files(SRC, DST)
+        seed_empty_derived_files(SEED_SRC if os.path.isdir(SEED_SRC) else SRC, DST)
 
     # Ensure derived CSVs exist (portfolio.csv, shadows, prices)
     os.environ["PORTFOLIOS_DIR"] = DST
