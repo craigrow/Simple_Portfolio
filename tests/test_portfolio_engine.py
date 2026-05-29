@@ -413,7 +413,7 @@ class TestSyncDividends:
         assert len(df) == 1
         assert df.iloc[0]["TICKER"] == "MSFT"
 
-    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[])
+    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[["MSFT", "2025-06-01", 0.75]])
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_no_refresh_when_fresh(self, mock_price, mock_divs):
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
@@ -422,6 +422,37 @@ class TestSyncDividends:
         mock_divs.reset_mock()
         portfolio_engine.sync_dividends(_paths())
         mock_divs.assert_not_called()
+
+    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[["MSFT", "2025-06-01", 0.75]])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_refreshes_fresh_but_empty_dividends_file(self, mock_price, mock_divs):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        with open(_paths()["dividends"], "w", newline="") as f:
+            csv.writer(f).writerow(["TICKER", "DATE", "AMOUNT"])
+
+        result = portfolio_engine.sync_dividends(_paths())
+
+        assert result is True
+        df = pd.read_csv(_paths()["dividends"])
+        assert len(df) == 1
+        assert df.iloc[0]["TICKER"] == "MSFT"
+
+    def test_fetch_dividends_skips_failed_ticker(self):
+        class FakeTicker:
+            def __init__(self, ticker):
+                self.ticker = ticker
+
+            @property
+            def dividends(self):
+                if self.ticker == "BAD":
+                    raise RuntimeError("boom")
+                return pd.Series([0.75], index=pd.to_datetime(["2025-06-01"]))
+
+        with patch.object(portfolio_engine.yf, "Ticker", side_effect=FakeTicker):
+            rows = portfolio_engine._fetch_dividends(["BAD", "MSFT"])
+
+        assert rows == [["MSFT", "2025-06-01", 0.75]]
 
     def test_no_fetch_when_no_tickers(self):
         result = portfolio_engine.sync_dividends(_paths())

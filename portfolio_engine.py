@@ -300,13 +300,25 @@ def _fetch_dividends(tickers):
     """Fetch dividend history for a set of tickers."""
     rows = []
     for ticker in tickers:
-        t = yf.Ticker(ticker)
-        divs = t.dividends
-        if divs is not None and len(divs) > 0:
-            for date, amount in divs.items():
-                date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
-                rows.append([ticker, date_str, round(float(amount), 6)])
+        try:
+            t = yf.Ticker(ticker)
+            divs = t.dividends
+            if divs is not None and len(divs) > 0:
+                for date, amount in divs.items():
+                    date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
+                    rows.append([ticker, date_str, round(float(amount), 6)])
+        except Exception:
+            continue
     return rows
+
+
+def _csv_has_data_rows(path):
+    if not os.path.exists(path):
+        return False
+    try:
+        return len(pd.read_csv(path)) > 0
+    except Exception:
+        return False
 
 
 def sync_dividends(paths):
@@ -317,7 +329,7 @@ def sync_dividends(paths):
         mtime = datetime.fromtimestamp(
             os.path.getmtime(paths["dividends"]), tz=ZoneInfo("America/New_York")
         )
-        if mtime.date() >= last_close:
+        if mtime.date() >= last_close and _csv_has_data_rows(paths["dividends"]):
             return False
 
     tickers = _get_all_tickers(paths)
