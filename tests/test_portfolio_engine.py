@@ -222,20 +222,54 @@ class TestSync:
 
 
 class TestShadowMissingPrice:
-    def test_sync_fails_without_partial_write_when_shadow_price_unavailable(self):
+    def test_sync_skips_shadow_rows_when_shadow_price_unavailable(self):
         def _no_prices(ticker, date_str):
             return None
 
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
         with patch.object(portfolio_engine, "_get_closing_price", side_effect=_no_prices):
-            with pytest.raises(RuntimeError, match="Could not fetch VOO close"):
-                portfolio_engine.sync(_paths())
+            assert portfolio_engine.sync(_paths()) == 1
         portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
-        assert len(portfolio) == 0
+        assert len(portfolio) == 1
         voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
         qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
         assert len(voo) == 0
         assert len(qqq) == 0
+
+    def test_sync_repairs_shadow_rows_after_skipped_non_trading_day(self):
+        def _prices(ticker, date_str):
+            prices = {
+                ("VOO", "2024-03-04"): 457.67,
+                ("QQQ", "2024-03-04"): 438.62,
+            }
+            return prices.get((ticker, date_str))
+
+        _write_transaction("2024-03-03", "BTC-USD", 62520.27, 0.00039759)
+        _write_transaction("2024-03-04", "BTC-USD", 67225.41, 0.0003719)
+
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_prices):
+            assert portfolio_engine.sync(_paths()) == 2
+
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert len(portfolio) == 2
+        assert len(voo) == 1
+        assert len(qqq) == 1
+        assert voo.iloc[0]["DATE"] == "2024-03-04"
+        assert qqq.iloc[0]["DATE"] == "2024-03-04"
+
+        os.remove(_paths()["shadow_voo"])
+        os.remove(_paths()["shadow_qqq"])
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_prices):
+            assert portfolio_engine.sync(_paths()) == 0
+
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert len(voo) == 1
+        assert len(qqq) == 1
+        assert voo.iloc[0]["DATE"] == "2024-03-04"
+        assert qqq.iloc[0]["DATE"] == "2024-03-04"
 
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_sync_repairs_trailing_missing_shadow_rows(self, mock_price):

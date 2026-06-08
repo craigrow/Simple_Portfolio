@@ -110,13 +110,6 @@ def _build_shadow_row(date_str, shadow_ticker, total_value, paths=None):
     return [date_str, shadow_ticker, price, shares, round(price * shares, 2)]
 
 
-def _require_shadow_row(paths, date_str, shadow_ticker, total_value):
-    row = _build_shadow_row(date_str, shadow_ticker, total_value, paths)
-    if row is None:
-        raise RuntimeError(f"Could not fetch {shadow_ticker} close for {date_str}")
-    return row
-
-
 def _append_rows(path, rows):
     _ensure_file(path)
     with open(path, "rb") as f:
@@ -177,18 +170,41 @@ def _invalidate_daily_values(paths):
             os.remove(path)
 
 
-def _shadow_rows_match_portfolio(portfolio, shadow):
-    if len(portfolio) != len(shadow):
-        return False
-    if portfolio.empty and shadow.empty:
-        return True
-    current = shadow[["DATE", "TOTAL_VALUE"]].copy()
-    expected = portfolio[["DATE", "TOTAL_VALUE"]].copy()
-    current["DATE"] = current["DATE"].astype(str)
-    expected["DATE"] = expected["DATE"].astype(str)
-    current["TOTAL_VALUE"] = current["TOTAL_VALUE"].astype(float).round(2)
-    expected["TOTAL_VALUE"] = expected["TOTAL_VALUE"].astype(float).round(2)
-    return current.reset_index(drop=True).equals(expected.reset_index(drop=True))
+def _shadow_rows_align_with_portfolio(portfolio, shadow):
+    """Return the portfolio index matched by the final shadow row.
+
+    Shadow portfolios may skip transactions from dates where the benchmark did
+    not trade, so shadow rows must be an ordered subset rather than an exact
+    row-for-row match.
+    """
+    if shadow.empty:
+        return -1
+
+    portfolio_rows = portfolio[["DATE", "TOTAL_VALUE"]].copy()
+    shadow_rows = shadow[["DATE", "TOTAL_VALUE"]].copy()
+    portfolio_rows["DATE"] = portfolio_rows["DATE"].astype(str)
+    shadow_rows["DATE"] = shadow_rows["DATE"].astype(str)
+    portfolio_rows["TOTAL_VALUE"] = portfolio_rows["TOTAL_VALUE"].astype(float).round(2)
+    shadow_rows["TOTAL_VALUE"] = shadow_rows["TOTAL_VALUE"].astype(float).round(2)
+
+    portfolio_idx = 0
+    last_match = -1
+    for _, shadow_row in shadow_rows.iterrows():
+        found = False
+        while portfolio_idx < len(portfolio_rows):
+            portfolio_row = portfolio_rows.iloc[portfolio_idx]
+            if (
+                portfolio_row["DATE"] == shadow_row["DATE"]
+                and portfolio_row["TOTAL_VALUE"] == shadow_row["TOTAL_VALUE"]
+            ):
+                last_match = portfolio_idx
+                portfolio_idx += 1
+                found = True
+                break
+            portfolio_idx += 1
+        if not found:
+            return None
+    return last_match
 
 
 def _repair_trailing_shadow_rows(paths, portfolio):
@@ -199,28 +215,21 @@ def _repair_trailing_shadow_rows(paths, portfolio):
     repaired = False
     for shadow_key, shadow_ticker in [("shadow_voo", "VOO"), ("shadow_qqq", "QQQ")]:
         shadow = read_csv(paths[shadow_key])
-        if len(shadow) > len(portfolio):
-            raise RuntimeError(
-                f"{shadow_ticker} shadow row count ({len(shadow)}) exceeds "
-                f"portfolio row count ({len(portfolio)})."
-            )
-
-        if len(shadow) == len(portfolio):
-            if not _shadow_rows_match_portfolio(portfolio, shadow):
-                raise RuntimeError(f"{shadow_ticker} shadow rows do not match portfolio transactions.")
-            continue
-
-        existing_portfolio_rows = portfolio.iloc[:len(shadow)]
-        if not _shadow_rows_match_portfolio(existing_portfolio_rows, shadow):
+        last_match = _shadow_rows_align_with_portfolio(portfolio, shadow)
+        if last_match is None:
             raise RuntimeError(f"{shadow_ticker} shadow rows do not match portfolio transactions.")
 
-        missing = portfolio.iloc[len(shadow):]
-        rows = [
-            _require_shadow_row(paths, str(row["DATE"]), shadow_ticker, float(row["TOTAL_VALUE"]))
-            for _, row in missing.iterrows()
-        ]
-        _append_rows(paths[shadow_key], rows)
-        repaired = True
+        missing = portfolio.iloc[last_match + 1:]
+        rows = []
+        for _, row in missing.iterrows():
+            shadow_row = _build_shadow_row(paths=paths, date_str=str(row["DATE"]),
+                                           shadow_ticker=shadow_ticker,
+                                           total_value=float(row["TOTAL_VALUE"]))
+            if shadow_row is not None:
+                rows.append(shadow_row)
+        if rows:
+            _append_rows(paths[shadow_key], rows)
+            repaired = True
 
     if repaired:
         _invalidate_daily_values(paths)
@@ -262,12 +271,18 @@ def sync(paths):
         total = round(price * shares, 2)
 
         portfolio_rows.append([date_str, ticker, price, shares, total])
-        voo_rows.append(_require_shadow_row(paths, date_str, "VOO", total))
-        qqq_rows.append(_require_shadow_row(paths, date_str, "QQQ", total))
+        voo_row = _build_shadow_row(date_str, "VOO", total, paths)
+        qqq_row = _build_shadow_row(date_str, "QQQ", total, paths)
+        if voo_row is not None:
+            voo_rows.append(voo_row)
+        if qqq_row is not None:
+            qqq_rows.append(qqq_row)
 
     _append_rows(paths["portfolio"], portfolio_rows)
-    _append_rows(paths["shadow_voo"], voo_rows)
-    _append_rows(paths["shadow_qqq"], qqq_rows)
+    if voo_rows:
+        _append_rows(paths["shadow_voo"], voo_rows)
+    if qqq_rows:
+        _append_rows(paths["shadow_qqq"], qqq_rows)
     _invalidate_daily_values(paths)
 
     return len(portfolio_rows)
