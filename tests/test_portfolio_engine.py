@@ -95,6 +95,20 @@ class TestListPortfolios:
         assert len(result) == 2
         assert result[0][0] == "another"  # alphabetical
 
+    def test_foolish_portfolio_lists_first(self):
+        foolish = os.path.join(portfolio_engine.PORTFOLIOS_DIR, "foolish_portfolio")
+        crypto = os.path.join(portfolio_engine.PORTFOLIOS_DIR, "crypto_portfolio")
+        os.makedirs(foolish)
+        os.makedirs(crypto)
+        with open(os.path.join(foolish, "config.json"), "w") as f:
+            json.dump({"name": "Foolish Portfolio"}, f)
+        with open(os.path.join(crypto, "config.json"), "w") as f:
+            json.dump({"name": "Crypto Portfolio"}, f)
+
+        result = portfolio_engine.list_portfolios()
+
+        assert result[0] == ("foolish_portfolio", "Foolish Portfolio")
+
 
 class TestReadCsv:
     def test_creates_file_if_missing(self):
@@ -208,19 +222,97 @@ class TestSync:
 
 
 class TestShadowMissingPrice:
-    def test_shadow_skipped_when_price_unavailable(self):
+    def test_sync_skips_shadow_rows_when_shadow_price_unavailable(self):
         def _no_prices(ticker, date_str):
             return None
 
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
         with patch.object(portfolio_engine, "_get_closing_price", side_effect=_no_prices):
-            portfolio_engine.sync(_paths())
+            assert portfolio_engine.sync(_paths()) == 1
         portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
         assert len(portfolio) == 1
         voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
         qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
         assert len(voo) == 0
         assert len(qqq) == 0
+
+    def test_sync_repairs_shadow_rows_after_skipped_non_trading_day(self):
+        def _prices(ticker, date_str):
+            prices = {
+                ("VOO", "2024-03-04"): 457.67,
+                ("QQQ", "2024-03-04"): 438.62,
+            }
+            return prices.get((ticker, date_str))
+
+        _write_transaction("2024-03-03", "BTC-USD", 62520.27, 0.00039759)
+        _write_transaction("2024-03-04", "BTC-USD", 67225.41, 0.0003719)
+
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_prices):
+            assert portfolio_engine.sync(_paths()) == 2
+
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert len(portfolio) == 2
+        assert len(voo) == 1
+        assert len(qqq) == 1
+        assert voo.iloc[0]["DATE"] == "2024-03-04"
+        assert qqq.iloc[0]["DATE"] == "2024-03-04"
+
+        os.remove(_paths()["shadow_voo"])
+        os.remove(_paths()["shadow_qqq"])
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_prices):
+            assert portfolio_engine.sync(_paths()) == 0
+
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert len(voo) == 1
+        assert len(qqq) == 1
+        assert voo.iloc[0]["DATE"] == "2024-03-04"
+        assert qqq.iloc[0]["DATE"] == "2024-03-04"
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_sync_repairs_trailing_missing_shadow_rows(self, mock_price):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        _write_transaction("2025-01-03", "AAPL", 200.0, 5.0)
+
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        new_portfolio_row = pd.DataFrame(
+            [["2025-01-03", "AAPL", 200.0, 5.0, 1000.0]],
+            columns=portfolio_engine.COLUMNS,
+        )
+        pd.concat([portfolio, new_portfolio_row], ignore_index=True).to_csv(_paths()["portfolio"], index=False)
+
+        count = portfolio_engine.sync(_paths())
+
+        assert count == 0
+        portfolio = portfolio_engine.read_csv(_paths()["portfolio"])
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert len(portfolio) == 2
+        assert len(voo) == 2
+        assert len(qqq) == 2
+        assert voo.iloc[1]["DATE"] == "2025-01-03"
+        assert qqq.iloc[1]["DATE"] == "2025-01-03"
+
+    def test_sync_uses_cached_prices_for_shadow_rows(self):
+        prices = pd.DataFrame(
+            {"VOO": [500.0], "QQQ": [400.0]},
+            index=pd.to_datetime(["2025-01-02"]),
+        )
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=RuntimeError("network down")):
+            count = portfolio_engine.sync(_paths())
+
+        assert count == 1
+        voo = portfolio_engine.read_csv(_paths()["shadow_voo"])
+        qqq = portfolio_engine.read_csv(_paths()["shadow_qqq"])
+        assert voo.iloc[0]["PURCHASE_PRICE"] == 500.0
+        assert qqq.iloc[0]["PURCHASE_PRICE"] == 400.0
 
 
 class TestMultipleTransactions:
@@ -399,7 +491,7 @@ class TestSyncDividends:
         assert len(df) == 1
         assert df.iloc[0]["TICKER"] == "MSFT"
 
-    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[])
+    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[["MSFT", "2025-06-01", 0.75]])
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_no_refresh_when_fresh(self, mock_price, mock_divs):
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
@@ -408,6 +500,37 @@ class TestSyncDividends:
         mock_divs.reset_mock()
         portfolio_engine.sync_dividends(_paths())
         mock_divs.assert_not_called()
+
+    @patch.object(portfolio_engine, "_fetch_dividends", return_value=[["MSFT", "2025-06-01", 0.75]])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_refreshes_fresh_but_empty_dividends_file(self, mock_price, mock_divs):
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        with open(_paths()["dividends"], "w", newline="") as f:
+            csv.writer(f).writerow(["TICKER", "DATE", "AMOUNT"])
+
+        result = portfolio_engine.sync_dividends(_paths())
+
+        assert result is True
+        df = pd.read_csv(_paths()["dividends"])
+        assert len(df) == 1
+        assert df.iloc[0]["TICKER"] == "MSFT"
+
+    def test_fetch_dividends_skips_failed_ticker(self):
+        class FakeTicker:
+            def __init__(self, ticker):
+                self.ticker = ticker
+
+            @property
+            def dividends(self):
+                if self.ticker == "BAD":
+                    raise RuntimeError("boom")
+                return pd.Series([0.75], index=pd.to_datetime(["2025-06-01"]))
+
+        with patch.object(portfolio_engine.yf, "Ticker", side_effect=FakeTicker):
+            rows = portfolio_engine._fetch_dividends(["BAD", "MSFT"])
+
+        assert rows == [["MSFT", "2025-06-01", 0.75]]
 
     def test_no_fetch_when_no_tickers(self):
         result = portfolio_engine.sync_dividends(_paths())
@@ -525,7 +648,8 @@ class TestPortfolioSummary:
 
 
 class TestUpdatePrices:
-    def test_cache_current_returns_ok(self):
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_cache_current_returns_ok(self, mock_price):
         """When cache already covers the last market close, skip fetch."""
         close_date = portfolio_engine._last_market_close()
         # Write a cache with data through close_date
@@ -600,8 +724,9 @@ class TestGetLastUpdated:
 
 
 class TestUpdatePricesDuplicateColumns:
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     @patch.object(portfolio_engine, "_last_market_close")
-    def test_retry_frames_with_overlapping_columns(self, mock_close):
+    def test_retry_frames_with_overlapping_columns(self, mock_close, mock_price):
         """Retry loop producing overlapping DataFrames should not crash concat."""
         from datetime import date, timedelta
         mock_close.return_value = date(2025, 1, 10)
@@ -622,8 +747,9 @@ class TestUpdatePricesDuplicateColumns:
         assert cached.index.is_unique
         assert not cached.columns.duplicated().any()
 
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     @patch.object(portfolio_engine, "_last_market_close")
-    def test_cache_written_with_unique_index(self, mock_close):
+    def test_cache_written_with_unique_index(self, mock_close, mock_price):
         """After a full update cycle, price_history.csv should have no duplicate dates."""
         from datetime import date
         mock_close.return_value = date(2025, 1, 5)
@@ -1057,3 +1183,117 @@ class TestGetGainersLosers:
         assert len(l) == 3
         assert len(pg) == 3
         assert len(pl) == 3
+
+
+class TestBaseballStats:
+    def _write_processed(self, path, rows):
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(portfolio_engine.COLUMNS)
+            writer.writerows(rows)
+
+    def test_batting_average_and_slugging_include_dividends(self):
+        self._write_processed(_paths()["portfolio"], [
+            ["2025-01-02", "MSFT", 100.0, 1.0, 100.0],
+            ["2025-01-02", "AAPL", 100.0, 1.0, 100.0],
+        ])
+        self._write_processed(_paths()["shadow_voo"], [
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+        ])
+        prices = pd.DataFrame({
+            "MSFT": [110.0],
+            "AAPL": [410.0],
+            "VOO": [120.0],
+        }, index=pd.to_datetime(["2025-01-03"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        with open(_paths()["dividends"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "AMOUNT"])
+            writer.writerow(["MSFT", "2025-01-03", 120.0])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["integrity"]["ok"] is True
+        assert stats["batting_average"] == 1.0
+        assert stats["slugging_percentage"] == 2.0
+        assert stats["slugging_buckets"] == [
+            {"bases": 1, "count": 1, "tickers": ["MSFT"]},
+            {"bases": 3, "count": 1, "tickers": ["AAPL"]},
+        ]
+        assert stats["counts"]["transaction_wins"] == 2
+        assert stats["counts"]["slugging_bases"] == 4
+
+    def test_batting_average_excludes_ties(self):
+        self._write_processed(_paths()["portfolio"], [
+            ["2025-01-02", "MSFT", 100.0, 1.0, 100.0],
+            ["2025-01-02", "AAPL", 100.0, 1.0, 100.0],
+        ])
+        self._write_processed(_paths()["shadow_voo"], [
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+            ["2025-01-02", "VOO", 100.0, 1.0, 100.0],
+        ])
+        prices = pd.DataFrame({
+            "MSFT": [110.0],
+            "AAPL": [100.0],
+            "VOO": [100.0],
+        }, index=pd.to_datetime(["2025-01-03"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["batting_average"] == 1.0
+        assert stats["counts"]["transaction_wins"] == 1
+        assert stats["counts"]["transaction_losses"] == 0
+        assert stats["counts"]["transaction_ties"] == 1
+
+    def test_daily_win_percentage_uses_daily_change_and_excludes_dividends(self):
+        self._write_processed(_paths()["portfolio"], [["2025-01-02", "MSFT", 100.0, 1.0, 100.0]])
+        self._write_processed(_paths()["shadow_voo"], [["2025-01-02", "VOO", 100.0, 1.0, 100.0]])
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 110.0, 99.0],
+            "VOO": [100.0, 105.0, 105.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        with open(_paths()["dividends"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "AMOUNT"])
+            writer.writerow(["MSFT", "2025-01-06", 1000.0])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["daily_win_percentage"] == 0.5
+        assert stats["counts"]["daily_wins"] == 1
+        assert stats["counts"]["daily_losses"] == 1
+        assert stats["counts"]["daily_ties"] == 0
+
+    def test_missing_shadow_rows_report_integrity_issue(self):
+        self._write_processed(_paths()["portfolio"], [
+            ["2025-01-02", "MSFT", 100.0, 1.0, 100.0],
+            ["2025-01-03", "AAPL", 100.0, 1.0, 100.0],
+        ])
+        self._write_processed(_paths()["shadow_voo"], [["2025-01-02", "VOO", 100.0, 1.0, 100.0]])
+
+        stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["integrity"]["ok"] is False
+        assert "does not match" in stats["integrity"]["message"]
+
+    def test_baseball_stats_do_not_call_write_or_refresh_paths(self):
+        self._write_processed(_paths()["portfolio"], [["2025-01-02", "MSFT", 100.0, 1.0, 100.0]])
+        self._write_processed(_paths()["shadow_voo"], [["2025-01-02", "VOO", 100.0, 1.0, 100.0]])
+        prices = pd.DataFrame({"MSFT": [100.0], "VOO": [100.0]}, index=pd.to_datetime(["2025-01-02"]))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+
+        with patch.object(portfolio_engine, "sync", side_effect=AssertionError("sync called")), \
+             patch.object(portfolio_engine, "refresh_data", side_effect=AssertionError("refresh called")), \
+             patch.object(portfolio_engine, "update_prices", side_effect=AssertionError("update called")), \
+             patch.object(portfolio_engine, "compute_daily_values", side_effect=AssertionError("compute called")), \
+             patch.object(portfolio_engine, "_fetch_current_prices", side_effect=AssertionError("fetch called")):
+            stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
+
+        assert stats["integrity"]["ok"] is True

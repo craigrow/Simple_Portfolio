@@ -6,6 +6,34 @@ import portfolio_engine
 app = Flask(__name__)
 
 
+def _refresh_all_portfolios(portfolios):
+    results = {}
+    failed = []
+    incomplete = []
+    for pid, _ in portfolios:
+        result = portfolio_engine.refresh_data(portfolio_engine.get_paths(pid))
+        results[pid] = result
+        status = result.get("status")
+        if status == "error":
+            failed.append(pid)
+        elif status != "ok":
+            incomplete.append(pid)
+
+    if failed:
+        return {
+            "status": "error",
+            "message": "Refresh failed for: " + ", ".join(failed),
+            "results": results,
+        }
+    if incomplete:
+        return {
+            "status": "incomplete",
+            "message": "Refresh incomplete for: " + ", ".join(incomplete),
+            "results": results,
+        }
+    return {"status": "ok", "message": "All portfolios refreshed", "results": results}
+
+
 @app.route("/")
 def index():
     portfolios = portfolio_engine.list_portfolios()
@@ -24,8 +52,12 @@ def index():
     paths = portfolio_engine.get_paths(portfolio_id)
     portfolio_name = next(n for pid, n in portfolios if pid == portfolio_id)
 
-    # Sync any new transactions, then load cached data — no API calls
-    portfolio_engine.sync(paths)
+    # Sync any new transactions, then load cached data. If sync cannot repair
+    # derived data, keep the dashboard available with the last readable cache.
+    try:
+        portfolio_engine.sync(paths)
+    except Exception:
+        pass
     port_df, shadow_voo_df, shadow_qqq_df = portfolio_engine.load_all(paths)
     splits_df = portfolio_engine._read_splits(paths)
     dividends_df = portfolio_engine._read_dividends(paths)
@@ -95,6 +127,33 @@ def index():
     )
 
 
+@app.route("/stats")
+def stats():
+    portfolios = portfolio_engine.list_portfolios()
+    portfolio_id = request.args.get("portfolio")
+    if portfolios and (not portfolio_id or portfolio_id not in [p[0] for p in portfolios]):
+        portfolio_id = portfolios[0][0]
+
+    portfolio_name = None
+    stats_result = None
+    stats_error = None
+    if portfolios:
+        portfolio_name = next(n for pid, n in portfolios if pid == portfolio_id)
+        try:
+            stats_result = portfolio_engine.get_baseball_stats(portfolio_engine.get_paths(portfolio_id), benchmark="VOO")
+        except Exception as e:
+            stats_error = str(e)
+
+    return render_template(
+        "stats.html",
+        portfolios=portfolios,
+        portfolio_id=portfolio_id,
+        portfolio_name=portfolio_name,
+        stats=stats_result,
+        stats_error=stats_error,
+    )
+
+
 @app.route("/refresh")
 def refresh():
     """Trigger data refresh — called by the Refresh button."""
@@ -103,6 +162,8 @@ def refresh():
         portfolios = portfolio_engine.list_portfolios()
         if not portfolios:
             return jsonify({"status": "ok", "message": "No portfolios"})
+        if request.args.get("all") == "1":
+            return jsonify(_refresh_all_portfolios(portfolios))
         if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
             portfolio_id = portfolios[0][0]
         paths = portfolio_engine.get_paths(portfolio_id)

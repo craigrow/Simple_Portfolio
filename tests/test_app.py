@@ -62,6 +62,8 @@ def _mock_closing_price(ticker, date_str):
     prices = {
         ("VOO", "2025-01-02"): 500.0,
         ("QQQ", "2025-01-02"): 400.0,
+        ("VOO", "2025-01-03"): 510.0,
+        ("QQQ", "2025-01-03"): 410.0,
     }
     return prices.get((ticker, date_str))
 
@@ -165,6 +167,80 @@ class TestRefreshRoute:
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "ok"
 
+    def test_refresh_all_portfolios(self, client, tmp_path):
+        second = tmp_path / "portfolios" / "second_portfolio"
+        second.mkdir(parents=True)
+        with open(second / "config.json", "w") as f:
+            json.dump({"name": "Second Portfolio"}, f)
+
+        with patch.object(portfolio_engine, "refresh_data", return_value={"status": "ok"}) as refresh_data:
+            resp = client.get("/refresh?all=1")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+        assert refresh_data.call_count == 2
+        assert set(data["results"]) == {"test_portfolio", "second_portfolio"}
+
+
+class TestStatsRoute:
+    def test_stats_route_renders_selected_portfolio(self, client):
+        stats = {
+            "benchmark": "VOO",
+            "batting_average": 1.0,
+            "slugging_percentage": 2.0,
+            "slugging_buckets": [
+                {"bases": 1, "count": 2, "tickers": ["MSFT", "AAPL"]},
+                {"bases": 4, "count": 4, "tickers": ["NVDA", "TSLA", "SHOP", "MELI"]},
+            ],
+            "daily_win_percentage": 0.5,
+            "counts": {
+                "transaction_wins": 2,
+                "transaction_losses": 0,
+                "transaction_ties": 0,
+                "slugging_bases": 4,
+                "slugging_transactions": 2,
+                "daily_wins": 1,
+                "daily_losses": 1,
+                "daily_ties": 0,
+            },
+            "integrity": {"ok": True, "message": None},
+        }
+        with patch.object(portfolio_engine, "get_baseball_stats", return_value=stats):
+            resp = client.get("/stats?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Portfolio Stats" in resp.data
+        assert b"Test Portfolio" in resp.data
+        assert b"Batting Average" in resp.data
+        assert b"1.000" in resp.data
+        assert b"1-baggers" in resp.data
+        assert b"MSFT, AAPL" in resp.data
+        assert b"4-baggers" in resp.data
+        assert b"NVDA" not in resp.data
+
+    def test_stats_route_catches_stats_errors(self, client):
+        with patch.object(portfolio_engine, "get_baseball_stats", side_effect=RuntimeError("stats boom")):
+            resp = client.get("/stats?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Baseball stats are unavailable" in resp.data
+        assert b"stats boom" in resp.data
+
+    def test_dashboard_does_not_depend_on_baseball_stats(self, client):
+        with patch.object(portfolio_engine, "get_baseball_stats", side_effect=RuntimeError("stats boom")):
+            resp = client.get("/?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Baseball Stats" not in resp.data
+
+    def test_dashboard_does_not_crash_when_sync_fails(self, client):
+        with patch.object(portfolio_engine, "sync", side_effect=RuntimeError("sync boom")):
+            resp = client.get("/?portfolio=test_portfolio")
+
+        assert resp.status_code == 200
+        assert b"Simple Portfolio Tracker" in resp.data
+
 
 class TestPortfolioViewRendering:
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
@@ -230,6 +306,7 @@ class TestStaleDataBanner:
             resp = client.get("/?portfolio=test_portfolio")
         assert b"var autoRefresh = true" in resp.data
         assert b"Fetching latest prices" in resp.data
+        assert b"/refresh?all=1" in resp.data
 
     def test_auto_refresh_script_disabled_when_fresh(self, client):
         with patch.object(portfolio_engine, "should_auto_refresh", return_value=False):
@@ -299,6 +376,7 @@ class TestMarketComparisonCard:
     def test_card_renders_when_data_available(self, mock_price, mock_open, client):
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        portfolio_engine.sync(_paths())
         dates = pd.date_range("2025-01-02", periods=1)
         prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
         prices.index.name = "Date"
@@ -324,6 +402,7 @@ class TestMarketComparisonCard:
     def test_positive_change_has_green_class(self, mock_price, mock_open, client):
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        portfolio_engine.sync(_paths())
         dates = pd.date_range("2025-01-02", periods=1)
         prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
         prices.index.name = "Date"
@@ -341,6 +420,7 @@ class TestMarketComparisonCard:
     def test_negative_change_has_red_class(self, mock_price, mock_open, client):
         with open(_paths()["transactions"], "a", newline="") as f:
             csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        portfolio_engine.sync(_paths())
         dates = pd.date_range("2025-01-02", periods=1)
         prices = pd.DataFrame({"MSFT": [150.0], "VOO": [550.0], "QQQ": [450.0]}, index=dates)
         prices.index.name = "Date"

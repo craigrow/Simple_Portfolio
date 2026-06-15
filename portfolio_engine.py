@@ -10,6 +10,11 @@ BASE_DIR = os.path.dirname(__file__)
 PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfolios"))
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
+DEFAULT_PORTFOLIO_ID = "foolish_portfolio"
+BENCHMARK_SHADOW_PATHS = {
+    "VOO": "shadow_voo",
+    "QQQ": "shadow_qqq",
+}
 
 
 def get_paths(portfolio_id):
@@ -33,11 +38,12 @@ def get_paths(portfolio_id):
 
 
 def list_portfolios():
-    """Return list of (portfolio_id, display_name) tuples, sorted alphabetically."""
+    """Return list of (portfolio_id, display_name) tuples, with the default first."""
     if not os.path.isdir(PORTFOLIOS_DIR):
         return []
     result = []
-    for name in sorted(os.listdir(PORTFOLIOS_DIR)):
+    portfolio_ids = sorted(os.listdir(PORTFOLIOS_DIR), key=lambda name: (name != DEFAULT_PORTFOLIO_ID, name))
+    for name in portfolio_ids:
         config_path = os.path.join(PORTFOLIOS_DIR, name, "config.json")
         if os.path.isfile(config_path):
             with open(config_path) as f:
@@ -58,6 +64,13 @@ def read_csv(path):
     return pd.read_csv(path)
 
 
+def _read_existing_csv(path, columns=None):
+    """Read a CSV without creating it; used by read-only reporting paths."""
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=columns or [])
+    return pd.read_csv(path)
+
+
 def _get_closing_price(ticker, date_str):
     """Fetch closing price for ticker on a given date."""
     t = yf.Ticker(ticker)
@@ -69,8 +82,28 @@ def _get_closing_price(ticker, date_str):
     return round(float(hist["Close"].iloc[0]), 2)
 
 
-def _build_shadow_row(date_str, shadow_ticker, total_value):
-    price = _get_closing_price(shadow_ticker, date_str)
+def _get_cached_closing_price(paths, ticker, date_str):
+    if not os.path.exists(paths["price_history"]):
+        return None
+    try:
+        prices = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    except Exception:
+        return None
+    if prices.empty or ticker not in prices.columns:
+        return None
+    target = pd.Timestamp(date_str).normalize()
+    normalized_index = pd.to_datetime(prices.index).normalize()
+    matches = prices.loc[normalized_index == target, ticker]
+    matches = matches.dropna()
+    if matches.empty:
+        return None
+    return round(float(matches.iloc[-1]), 2)
+
+
+def _build_shadow_row(date_str, shadow_ticker, total_value, paths=None):
+    price = _get_cached_closing_price(paths, shadow_ticker, date_str) if paths else None
+    if price is None:
+        price = _get_closing_price(shadow_ticker, date_str)
     if price is None:
         return None
     shares = round(total_value / price, 5)
@@ -137,6 +170,72 @@ def _invalidate_daily_values(paths):
             os.remove(path)
 
 
+def _shadow_rows_align_with_portfolio(portfolio, shadow):
+    """Return the portfolio index matched by the final shadow row.
+
+    Shadow portfolios may skip transactions from dates where the benchmark did
+    not trade, so shadow rows must be an ordered subset rather than an exact
+    row-for-row match.
+    """
+    if shadow.empty:
+        return -1
+
+    portfolio_rows = portfolio[["DATE", "TOTAL_VALUE"]].copy()
+    shadow_rows = shadow[["DATE", "TOTAL_VALUE"]].copy()
+    portfolio_rows["DATE"] = portfolio_rows["DATE"].astype(str)
+    shadow_rows["DATE"] = shadow_rows["DATE"].astype(str)
+    portfolio_rows["TOTAL_VALUE"] = portfolio_rows["TOTAL_VALUE"].astype(float).round(2)
+    shadow_rows["TOTAL_VALUE"] = shadow_rows["TOTAL_VALUE"].astype(float).round(2)
+
+    portfolio_idx = 0
+    last_match = -1
+    for _, shadow_row in shadow_rows.iterrows():
+        found = False
+        while portfolio_idx < len(portfolio_rows):
+            portfolio_row = portfolio_rows.iloc[portfolio_idx]
+            if (
+                portfolio_row["DATE"] == shadow_row["DATE"]
+                and portfolio_row["TOTAL_VALUE"] == shadow_row["TOTAL_VALUE"]
+            ):
+                last_match = portfolio_idx
+                portfolio_idx += 1
+                found = True
+                break
+            portfolio_idx += 1
+        if not found:
+            return None
+    return last_match
+
+
+def _repair_trailing_shadow_rows(paths, portfolio):
+    """Append missing trailing shadow rows, or raise on non-trailing mismatches."""
+    if portfolio.empty:
+        return False
+
+    repaired = False
+    for shadow_key, shadow_ticker in [("shadow_voo", "VOO"), ("shadow_qqq", "QQQ")]:
+        shadow = read_csv(paths[shadow_key])
+        last_match = _shadow_rows_align_with_portfolio(portfolio, shadow)
+        if last_match is None:
+            raise RuntimeError(f"{shadow_ticker} shadow rows do not match portfolio transactions.")
+
+        missing = portfolio.iloc[last_match + 1:]
+        rows = []
+        for _, row in missing.iterrows():
+            shadow_row = _build_shadow_row(paths=paths, date_str=str(row["DATE"]),
+                                           shadow_ticker=shadow_ticker,
+                                           total_value=float(row["TOTAL_VALUE"]))
+            if shadow_row is not None:
+                rows.append(shadow_row)
+        if rows:
+            _append_rows(paths[shadow_key], rows)
+            repaired = True
+
+    if repaired:
+        _invalidate_daily_values(paths)
+    return repaired
+
+
 def sync(paths):
     """Process new transactions and update portfolio + shadow files."""
     txn = pd.read_csv(paths["transactions"])
@@ -150,6 +249,8 @@ def sync(paths):
             expected.to_csv(paths["portfolio"], index=False)
             _invalidate_daily_values(paths)
             portfolio = expected
+
+    _repair_trailing_shadow_rows(paths, portfolio)
 
     if portfolio.empty:
         new = txn
@@ -170,24 +271,19 @@ def sync(paths):
         total = round(price * shares, 2)
 
         portfolio_rows.append([date_str, ticker, price, shares, total])
-
-        try:
-            voo_row = _build_shadow_row(date_str, "VOO", total)
-            if voo_row:
-                voo_rows.append(voo_row)
-        except Exception:
-            pass
-
-        try:
-            qqq_row = _build_shadow_row(date_str, "QQQ", total)
-            if qqq_row:
-                qqq_rows.append(qqq_row)
-        except Exception:
-            pass
+        voo_row = _build_shadow_row(date_str, "VOO", total, paths)
+        qqq_row = _build_shadow_row(date_str, "QQQ", total, paths)
+        if voo_row is not None:
+            voo_rows.append(voo_row)
+        if qqq_row is not None:
+            qqq_rows.append(qqq_row)
 
     _append_rows(paths["portfolio"], portfolio_rows)
-    _append_rows(paths["shadow_voo"], voo_rows)
-    _append_rows(paths["shadow_qqq"], qqq_rows)
+    if voo_rows:
+        _append_rows(paths["shadow_voo"], voo_rows)
+    if qqq_rows:
+        _append_rows(paths["shadow_qqq"], qqq_rows)
+    _invalidate_daily_values(paths)
 
     return len(portfolio_rows)
 
@@ -287,13 +383,25 @@ def _fetch_dividends(tickers):
     """Fetch dividend history for a set of tickers."""
     rows = []
     for ticker in tickers:
-        t = yf.Ticker(ticker)
-        divs = t.dividends
-        if divs is not None and len(divs) > 0:
-            for date, amount in divs.items():
-                date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
-                rows.append([ticker, date_str, round(float(amount), 6)])
+        try:
+            t = yf.Ticker(ticker)
+            divs = t.dividends
+            if divs is not None and len(divs) > 0:
+                for date, amount in divs.items():
+                    date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
+                    rows.append([ticker, date_str, round(float(amount), 6)])
+        except Exception:
+            continue
     return rows
+
+
+def _csv_has_data_rows(path):
+    if not os.path.exists(path):
+        return False
+    try:
+        return len(pd.read_csv(path)) > 0
+    except Exception:
+        return False
 
 
 def sync_dividends(paths):
@@ -304,7 +412,7 @@ def sync_dividends(paths):
         mtime = datetime.fromtimestamp(
             os.path.getmtime(paths["dividends"]), tz=ZoneInfo("America/New_York")
         )
-        if mtime.date() >= last_close:
+        if mtime.date() >= last_close and _csv_has_data_rows(paths["dividends"]):
             return False
 
     tickers = _get_all_tickers(paths)
@@ -979,6 +1087,159 @@ def get_gainers_losers(portfolio_summary_data, paths, n=5):
     by_dollar = sorted(changes, key=lambda x: x["CHANGE"], reverse=True)
     by_pct = sorted(changes, key=lambda x: x["PCT"], reverse=True)
     return by_dollar[:n], by_dollar[-n:][::-1], by_pct[:n], by_pct[-n:][::-1]
+
+
+def _empty_baseball_stats(benchmark, integrity_ok=True, message=None):
+    return {
+        "benchmark": benchmark,
+        "batting_average": None,
+        "slugging_percentage": None,
+        "slugging_buckets": [],
+        "daily_win_percentage": None,
+        "counts": {
+            "transaction_wins": 0,
+            "transaction_losses": 0,
+            "transaction_ties": 0,
+            "slugging_bases": 0,
+            "slugging_transactions": 0,
+            "daily_wins": 0,
+            "daily_losses": 0,
+            "daily_ties": 0,
+        },
+        "integrity": {
+            "ok": integrity_ok,
+            "message": message,
+        },
+    }
+
+
+def _cached_current_prices(paths, *portfolios):
+    if not os.path.exists(paths["price_history"]):
+        return {}
+    prices_df = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    if prices_df.empty:
+        return {}
+    tickers = set()
+    for portfolio_df in portfolios:
+        if not portfolio_df.empty and "TICKER" in portfolio_df.columns:
+            tickers.update(portfolio_df["TICKER"].dropna().astype(str))
+    current_prices = {}
+    for ticker in tickers:
+        if ticker in prices_df.columns:
+            last_idx = prices_df[ticker].last_valid_index()
+            if last_idx is not None:
+                current_prices[ticker] = round(float(prices_df[ticker].loc[last_idx]), 2)
+    return current_prices
+
+
+def _baseball_batting_and_slugging(paths, benchmark, main_df, benchmark_df):
+    stats = _empty_baseball_stats(benchmark)
+    if main_df.empty:
+        return stats
+    if len(main_df) != len(benchmark_df):
+        stats["integrity"] = {
+            "ok": False,
+            "message": (
+                f"{benchmark} shadow row count ({len(benchmark_df)}) does not match "
+                f"portfolio row count ({len(main_df)})."
+            ),
+        }
+        return stats
+
+    splits_df = _read_splits(paths)
+    dividends_df = _read_dividends(paths)
+    current_prices = _cached_current_prices(paths, main_df, benchmark_df)
+    main_enriched, _, _ = enrich_portfolio(main_df, splits_df, dividends_df, current_prices)
+    benchmark_enriched, _, _ = enrich_portfolio(benchmark_df, splits_df, dividends_df, current_prices)
+
+    wins = losses = ties = 0
+    bases = 0
+    bucket_map = {}
+    for idx in range(len(main_enriched)):
+        main_return = float(main_enriched.iloc[idx]["TOTAL_RETURN"]) - float(main_enriched.iloc[idx]["TOTAL_VALUE"])
+        benchmark_return = float(benchmark_enriched.iloc[idx]["TOTAL_RETURN"]) - float(benchmark_enriched.iloc[idx]["TOTAL_VALUE"])
+        if main_return > benchmark_return:
+            wins += 1
+        elif main_return < benchmark_return:
+            losses += 1
+        else:
+            ties += 1
+
+        invested = float(main_enriched.iloc[idx]["TOTAL_VALUE"])
+        if invested > 0:
+            multiple = float(main_enriched.iloc[idx]["TOTAL_RETURN"]) / invested
+            row_bases = max(0, int(multiple) - 1)
+            bases += row_bases
+            if row_bases > 0:
+                bucket = bucket_map.setdefault(row_bases, {"bases": row_bases, "count": 0, "tickers": []})
+                bucket["count"] += 1
+                ticker = str(main_enriched.iloc[idx]["TICKER"])
+                if ticker not in bucket["tickers"]:
+                    bucket["tickers"].append(ticker)
+
+    denominator = wins + losses
+    stats["batting_average"] = round(wins / denominator, 4) if denominator else None
+    stats["slugging_percentage"] = round(bases / len(main_enriched), 4) if len(main_enriched) else None
+    stats["slugging_buckets"] = [bucket_map[key] for key in sorted(bucket_map)]
+    stats["counts"].update({
+        "transaction_wins": wins,
+        "transaction_losses": losses,
+        "transaction_ties": ties,
+        "slugging_bases": bases,
+        "slugging_transactions": len(main_enriched),
+    })
+    return stats
+
+
+def _baseball_daily_win_percentage(paths, benchmark, main_df, benchmark_df):
+    if main_df.empty or benchmark_df.empty or not os.path.exists(paths["price_history"]):
+        return None, {"daily_wins": 0, "daily_losses": 0, "daily_ties": 0}
+
+    prices_df = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    if prices_df.empty:
+        return None, {"daily_wins": 0, "daily_losses": 0, "daily_ties": 0}
+
+    earliest = pd.to_datetime(main_df["DATE"]).min()
+    prices_df = prices_df.loc[earliest:]
+    if prices_df.empty:
+        return None, {"daily_wins": 0, "daily_losses": 0, "daily_ties": 0}
+
+    splits_df = _read_splits(paths)
+    empty_dividends = pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+    main_values = _vectorized_portfolio_values(main_df, splits_df, empty_dividends, prices_df)
+    benchmark_values = _vectorized_portfolio_values(benchmark_df, splits_df, empty_dividends, prices_df)
+
+    main_pct = main_values.pct_change()
+    benchmark_pct = benchmark_values.pct_change()
+    valid = main_pct.notna() & benchmark_pct.notna()
+    valid &= main_values.shift(1).fillna(0) > 0
+    valid &= benchmark_values.shift(1).fillna(0) > 0
+
+    wins = int((main_pct[valid] > benchmark_pct[valid]).sum())
+    losses = int((main_pct[valid] < benchmark_pct[valid]).sum())
+    ties = int((main_pct[valid] == benchmark_pct[valid]).sum())
+    denominator = wins + losses
+    value = round(wins / denominator, 4) if denominator else None
+    return value, {"daily_wins": wins, "daily_losses": losses, "daily_ties": ties}
+
+
+def get_baseball_stats(paths, benchmark="VOO"):
+    """Return read-only baseball-style stats for a portfolio against a benchmark."""
+    if benchmark not in BENCHMARK_SHADOW_PATHS:
+        return _empty_baseball_stats(benchmark, integrity_ok=False, message=f"Unsupported benchmark: {benchmark}")
+
+    main_df = _read_existing_csv(paths["portfolio"], COLUMNS)
+    benchmark_key = BENCHMARK_SHADOW_PATHS[benchmark]
+    benchmark_df = _read_existing_csv(paths[benchmark_key], COLUMNS)
+
+    stats = _baseball_batting_and_slugging(paths, benchmark, main_df, benchmark_df)
+    if not stats["integrity"]["ok"]:
+        return stats
+
+    daily_value, daily_counts = _baseball_daily_win_percentage(paths, benchmark, main_df, benchmark_df)
+    stats["daily_win_percentage"] = daily_value
+    stats["counts"].update(daily_counts)
+    return stats
 
 
 def refresh_data(paths):
