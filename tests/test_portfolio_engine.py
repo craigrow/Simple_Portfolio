@@ -401,6 +401,61 @@ class TestSyncSplits:
         result = portfolio_engine.sync_splits(_paths())
         assert result is False
 
+    @patch.object(portfolio_engine, "_fetch_splits", return_value=[["CRWD", "2025-01-03", 4.0]])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_new_split_invalidates_price_cache(self, mock_price, mock_splits):
+        """When a new split is detected, the ticker's cached prices are dropped."""
+        _write_transaction("2025-01-02", "CRWD", 800.0, 1.0)
+        portfolio_engine.sync(_paths())
+
+        # Seed a price_history with pre-split prices
+        prices_df = pd.DataFrame(
+            {"CRWD": [780.0, 790.0, 800.0]},
+            index=pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-04"]),
+        )
+        prices_df.index.name = "Date"
+        prices_df.to_csv(_paths()["price_history"])
+
+        # Seed a daily_values cache
+        daily_df = pd.DataFrame({"DATE": ["2025-01-02"], "MAIN": [780.0], "VOO": [500.0], "QQQ": [400.0]})
+        daily_df.to_csv(_paths()["daily_values"], index=False)
+
+        portfolio_engine.sync_splits(_paths())
+
+        # Price history should no longer contain the split ticker
+        cached = pd.read_csv(_paths()["price_history"], index_col=0)
+        assert "CRWD" not in cached.columns
+
+        # Daily values cache should be invalidated
+        assert not os.path.exists(_paths()["daily_values"])
+
+    @patch.object(portfolio_engine, "_fetch_splits", return_value=[["MSFT", "2025-01-03", 2.0]])
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_existing_split_does_not_invalidate_cache(self, mock_price, mock_splits):
+        """When splits haven't changed, price cache is untouched."""
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+
+        # Pre-seed the splits file with the same data
+        with open(_paths()["splits"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TICKER", "DATE", "RATIO"])
+            writer.writerow(["MSFT", "2025-01-03", 2.0])
+        # Touch it to look stale
+        os.utime(_paths()["splits"], (0, 0))
+
+        prices_df = pd.DataFrame(
+            {"MSFT": [100.0, 105.0]},
+            index=pd.to_datetime(["2025-01-02", "2025-01-03"]),
+        )
+        prices_df.index.name = "Date"
+        prices_df.to_csv(_paths()["price_history"])
+
+        portfolio_engine.sync_splits(_paths())
+
+        cached = pd.read_csv(_paths()["price_history"], index_col=0)
+        assert "MSFT" in cached.columns
+
 
 class TestGetCurrentValues:
     @patch.object(portfolio_engine, "_fetch_current_prices", return_value={"MSFT": 150.0})

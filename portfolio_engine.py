@@ -368,7 +368,25 @@ def sync_splits(paths):
     if not tickers:
         return False
 
+    old_splits = set()
+    if os.path.exists(paths["splits"]):
+        old_df = pd.read_csv(paths["splits"])
+        for _, r in old_df.iterrows():
+            old_splits.add((r["TICKER"], r["DATE"], float(r["RATIO"])))
+
     rows = _fetch_splits(tickers)
+
+    new_splits = {(r[0], r[1], r[2]) for r in rows}
+    newly_split_tickers = {t for t, d, r in new_splits - old_splits}
+
+    if newly_split_tickers and os.path.exists(paths["price_history"]):
+        cached = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+        cols_to_drop = [c for c in cached.columns if c in newly_split_tickers]
+        if cols_to_drop:
+            cached = cached.drop(columns=cols_to_drop)
+            cached.to_csv(paths["price_history"])
+            _invalidate_daily_values(paths)
+
     os.makedirs(os.path.dirname(paths["splits"]), exist_ok=True)
     with open(paths["splits"], "w", newline="") as f:
         writer = csv.writer(f)
