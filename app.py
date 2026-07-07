@@ -162,11 +162,18 @@ def refresh():
         portfolios = portfolio_engine.list_portfolios()
         if not portfolios:
             return jsonify({"status": "ok", "message": "No portfolios"})
+        force = request.args.get("force") == "1"
         if request.args.get("all") == "1":
+            if force:
+                for pid, _ in portfolios:
+                    portfolio_engine.invalidate_daily_values(
+                        portfolio_engine.get_paths(pid))
             return jsonify(_refresh_all_portfolios(portfolios))
         if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
             portfolio_id = portfolios[0][0]
         paths = portfolio_engine.get_paths(portfolio_id)
+        if force:
+            portfolio_engine.invalidate_daily_values(paths)
         result = portfolio_engine.refresh_data(paths)
         return jsonify(result)
     except Exception as e:

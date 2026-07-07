@@ -170,6 +170,11 @@ def _invalidate_daily_values(paths):
             os.remove(path)
 
 
+def invalidate_daily_values(paths):
+    """Public wrapper — force-clear the daily values cache for a portfolio."""
+    _invalidate_daily_values(paths)
+
+
 def _shadow_rows_align_with_portfolio(portfolio, shadow):
     """Return the portfolio index matched by the final shadow row.
 
