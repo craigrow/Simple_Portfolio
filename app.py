@@ -166,14 +166,14 @@ def refresh():
         if request.args.get("all") == "1":
             if force:
                 for pid, _ in portfolios:
-                    portfolio_engine.invalidate_daily_values(
+                    portfolio_engine.invalidate_all_caches(
                         portfolio_engine.get_paths(pid))
             return jsonify(_refresh_all_portfolios(portfolios))
         if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
             portfolio_id = portfolios[0][0]
         paths = portfolio_engine.get_paths(portfolio_id)
         if force:
-            portfolio_engine.invalidate_daily_values(paths)
+            portfolio_engine.invalidate_all_caches(paths)
         result = portfolio_engine.refresh_data(paths)
         return jsonify(result)
     except Exception as e:

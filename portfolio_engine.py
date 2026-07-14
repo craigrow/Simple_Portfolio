@@ -175,6 +175,14 @@ def invalidate_daily_values(paths):
     _invalidate_daily_values(paths)
 
 
+def invalidate_all_caches(paths):
+    """Nuclear option — clear price history, splits, and daily values."""
+    _invalidate_daily_values(paths)
+    for key in ["price_history", "splits"]:
+        if os.path.exists(paths[key]):
+            os.remove(paths[key])
+
+
 def _shadow_rows_align_with_portfolio(portfolio, shadow):
     """Return the portfolio index matched by the final shadow row.
 
