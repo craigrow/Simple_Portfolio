@@ -72,14 +72,19 @@ def _read_existing_csv(path, columns=None):
 
 
 def _get_closing_price(ticker, date_str):
-    """Fetch closing price for ticker on a given date."""
+    """Fetch closing price for ticker on a given date.
+    Falls back to the most recent prior trading day if the market was closed."""
     t = yf.Ticker(ticker)
     start = pd.Timestamp(date_str)
     end = start + pd.Timedelta(days=1)
     hist = t.history(start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d"))
     if hist.empty:
-        return None
-    return round(float(hist["Close"].iloc[0]), 2)
+        lookback_start = start - pd.Timedelta(days=5)
+        hist = t.history(start=lookback_start.strftime("%Y-%m-%d"),
+                         end=end.strftime("%Y-%m-%d"))
+        if hist.empty:
+            return None
+    return round(float(hist["Close"].iloc[-1]), 2)
 
 
 def _get_cached_closing_price(paths, ticker, date_str):
@@ -92,12 +97,10 @@ def _get_cached_closing_price(paths, ticker, date_str):
     if prices.empty or ticker not in prices.columns:
         return None
     target = pd.Timestamp(date_str).normalize()
-    normalized_index = pd.to_datetime(prices.index).normalize()
-    matches = prices.loc[normalized_index == target, ticker]
-    matches = matches.dropna()
-    if matches.empty:
+    prior = prices.loc[prices.index.normalize() <= target, ticker].dropna()
+    if prior.empty:
         return None
-    return round(float(matches.iloc[-1]), 2)
+    return round(float(prior.iloc[-1]), 2)
 
 
 def _build_shadow_row(date_str, shadow_ticker, total_value, paths=None):
@@ -176,9 +179,10 @@ def invalidate_daily_values(paths):
 
 
 def invalidate_all_caches(paths):
-    """Nuclear option — clear price history, splits, and daily values."""
+    """Nuclear option — clear all cached data so everything is rebuilt."""
     _invalidate_daily_values(paths)
-    for key in ["price_history", "splits"]:
+    for key in ["price_history", "splits", "portfolio", "shadow_voo", "shadow_qqq",
+                "dividends"]:
         if os.path.exists(paths[key]):
             os.remove(paths[key])
 
