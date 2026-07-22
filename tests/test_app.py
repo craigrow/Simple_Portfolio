@@ -27,6 +27,7 @@ def setup_teardown(tmp_path):
         "root": str(test_portfolio),
         "data_dir": str(data_dir),
         "transactions": str(test_portfolio / "transactions.csv"),
+        "manual_prices": str(test_portfolio / "manual_prices.csv"),
         "portfolio": str(data_dir / "portfolio.csv"),
         "shadow_voo": str(data_dir / "shadow_voo.csv"),
         "shadow_qqq": str(data_dir / "shadow_qqq.csv"),

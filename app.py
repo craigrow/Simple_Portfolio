@@ -56,6 +56,7 @@ def index():
     # derived data, keep the dashboard available with the last readable cache.
     try:
         portfolio_engine.sync(paths)
+        portfolio_engine.sync_manual_prices(paths)
     except Exception:
         pass
     port_df, shadow_voo_df, shadow_qqq_df = portfolio_engine.load_all(paths)

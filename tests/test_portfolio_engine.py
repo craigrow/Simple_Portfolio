@@ -29,6 +29,7 @@ def setup_teardown(tmp_path):
         "root": str(test_portfolio),
         "data_dir": str(data_dir),
         "transactions": str(test_portfolio / "transactions.csv"),
+        "manual_prices": str(test_portfolio / "manual_prices.csv"),
         "portfolio": str(data_dir / "portfolio.csv"),
         "shadow_voo": str(data_dir / "shadow_voo.csv"),
         "shadow_qqq": str(data_dir / "shadow_qqq.csv"),
@@ -861,6 +862,98 @@ class TestRefreshDataErrorHandling:
                             result = portfolio_engine.refresh_data(_paths())
         assert result["status"] == "error"
         assert "chart boom" in result["message"]
+
+
+def _set_manual_pricing():
+    with open(_paths()["config"], "w") as f:
+        json.dump({"name": "Test Portfolio", "manual_pricing": True}, f)
+
+
+class TestManualPricing:
+    def test_not_manual_by_default(self):
+        assert portfolio_engine.is_manual_pricing(_paths()) is False
+
+    def test_manual_flag_read_from_config(self):
+        _set_manual_pricing()
+        assert portfolio_engine.is_manual_pricing(_paths()) is True
+
+    def test_add_manual_price_creates_file(self):
+        row = portfolio_engine.add_manual_price(_paths(), "2026-03-23", "Flagship", 13.01)
+        assert row == ["2026-03-23", "Flagship", 13.01]
+        df = pd.read_csv(_paths()["manual_prices"])
+        assert list(df.columns) == portfolio_engine.MANUAL_PRICE_COLUMNS
+        assert df.iloc[0]["TICKER"] == "Flagship"
+        assert df.iloc[0]["PRICE"] == 13.01
+
+    def test_add_manual_price_updates_existing(self):
+        portfolio_engine.add_manual_price(_paths(), "2026-03-23", "Flagship", 13.01)
+        portfolio_engine.add_manual_price(_paths(), "2026-03-23", "Flagship", 13.55)
+        df = pd.read_csv(_paths()["manual_prices"])
+        flagship = df[(df["DATE"] == "2026-03-23") & (df["TICKER"] == "Flagship")]
+        assert len(flagship) == 1
+        assert flagship.iloc[0]["PRICE"] == 13.55
+
+    def test_manual_tickers_empty_for_normal_portfolio(self):
+        _write_transaction("2025-01-02", "AAPL", 100.0, 10.0)
+        assert portfolio_engine._manual_tickers(_paths()) == set()
+
+    def test_manual_tickers_from_transactions_and_prices(self):
+        _set_manual_pricing()
+        _write_transaction("2026-03-23", "Flagship", 13.01, 6.149116)
+        portfolio_engine.add_manual_price(_paths(), "2026-04-01", "Income", 10.05)
+        assert portfolio_engine._manual_tickers(_paths()) == {"Flagship", "Income"}
+
+    def test_sync_manual_prices_noop_for_normal_portfolio(self):
+        _write_transaction("2025-01-02", "AAPL", 100.0, 10.0)
+        assert portfolio_engine.sync_manual_prices(_paths()) is False
+
+    def test_sync_manual_prices_uses_transaction_prices(self):
+        _set_manual_pricing()
+        _write_transaction("2026-03-23", "Flagship", 13.01, 6.149116)
+        _write_transaction("2026-03-29", "Flagship", 12.76, 6.29592)
+        assert portfolio_engine.sync_manual_prices(_paths()) is True
+        prices = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        assert "Flagship" in prices.columns
+        assert prices.loc["2026-03-23", "Flagship"] == 13.01
+        assert prices.loc["2026-03-29", "Flagship"] == 12.76
+
+    def test_explicit_manual_price_overrides_transaction_price(self):
+        _set_manual_pricing()
+        _write_transaction("2026-03-23", "Flagship", 13.01, 6.149116)
+        portfolio_engine.add_manual_price(_paths(), "2026-03-23", "Flagship", 14.00)
+        portfolio_engine.sync_manual_prices(_paths())
+        prices = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        assert prices.loc["2026-03-23", "Flagship"] == 14.00
+
+    def test_sync_manual_prices_preserves_existing_benchmark_columns(self):
+        _set_manual_pricing()
+        _write_transaction("2026-03-23", "Flagship", 13.01, 6.149116)
+        dates = pd.to_datetime(["2026-03-23", "2026-03-24"])
+        cache = pd.DataFrame({"VOO": [500.0, 505.0]}, index=dates)
+        cache.index.name = "Date"
+        cache.to_csv(_paths()["price_history"])
+        portfolio_engine.sync_manual_prices(_paths())
+        prices = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        assert prices.loc["2026-03-23", "VOO"] == 500.0
+        assert prices.loc["2026-03-24", "VOO"] == 505.0
+        assert prices.loc["2026-03-23", "Flagship"] == 13.01
+
+    def test_update_prices_excludes_manual_tickers_from_fetch(self):
+        _set_manual_pricing()
+        _write_transaction("2026-03-23", "Flagship", 13.01, 6.149116)
+        portfolio_engine.sync(_paths())  # creates portfolio + VOO/QQQ shadows
+        captured = {}
+
+        def fake_download(tickers, *args, **kwargs):
+            captured["tickers"] = tickers
+            idx = pd.date_range("2026-03-23", periods=2)
+            cols = tickers if isinstance(tickers, list) else [tickers]
+            data = {("Close", c): [100.0, 101.0] for c in cols}
+            return pd.DataFrame(data, index=idx)
+
+        with patch("portfolio_engine.yf.download", side_effect=fake_download):
+            portfolio_engine.update_prices(_paths())
+        assert "Flagship" not in captured.get("tickers", [])
 
 
 class TestVectorizedPortfolioValues:

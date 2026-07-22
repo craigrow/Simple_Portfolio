@@ -10,6 +10,7 @@ BASE_DIR = os.path.dirname(__file__)
 PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfolios"))
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
+MANUAL_PRICE_COLUMNS = ["DATE", "TICKER", "PRICE"]
 DEFAULT_PORTFOLIO_ID = "foolish_portfolio"
 BENCHMARK_SHADOW_PATHS = {
     "VOO": "shadow_voo",
@@ -25,6 +26,7 @@ def get_paths(portfolio_id):
         "root": root,
         "data_dir": data,
         "transactions": os.path.join(root, "transactions.csv"),
+        "manual_prices": os.path.join(root, "manual_prices.csv"),
         "portfolio": os.path.join(data, "portfolio.csv"),
         "shadow_voo": os.path.join(data, "shadow_voo.csv"),
         "shadow_qqq": os.path.join(data, "shadow_qqq.csv"),
@@ -50,6 +52,138 @@ def list_portfolios():
                 cfg = json.load(f)
             result.append((name, cfg.get("name", name)))
     return result
+
+
+def _load_config(paths):
+    """Return the portfolio's config dict, or empty dict if missing/unreadable."""
+    if not os.path.exists(paths["config"]):
+        return {}
+    try:
+        with open(paths["config"]) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def is_manual_pricing(paths):
+    """Return True if this portfolio's prices are entered manually (no yfinance)."""
+    return bool(_load_config(paths).get("manual_pricing"))
+
+
+def _read_manual_prices(paths):
+    """Read manual_prices.csv into a DataFrame (empty if the file is absent)."""
+    if not os.path.exists(paths["manual_prices"]):
+        return pd.DataFrame(columns=MANUAL_PRICE_COLUMNS)
+    df = pd.read_csv(paths["manual_prices"])
+    for col in MANUAL_PRICE_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.Series(dtype="object")
+    return df[MANUAL_PRICE_COLUMNS]
+
+
+def _manual_tickers(paths):
+    """Return the set of tickers priced manually for this portfolio.
+
+    For a manual-pricing portfolio, every holding (from transactions.csv) is
+    priced manually; shadow benchmarks (VOO/QQQ) are still fetched from yfinance.
+    Returns an empty set for normal portfolios."""
+    if not is_manual_pricing(paths):
+        return set()
+    tickers = set()
+    if os.path.exists(paths["transactions"]):
+        txn = pd.read_csv(paths["transactions"])
+        if not txn.empty and "TICKER" in txn.columns:
+            tickers.update(txn["TICKER"].dropna().astype(str))
+    manual = _read_manual_prices(paths)
+    if not manual.empty:
+        tickers.update(manual["TICKER"].dropna().astype(str))
+    return tickers
+
+
+def _manual_price_points(paths):
+    """Return a long DataFrame [DATE, TICKER, PRICE] of all manual price points.
+
+    Combines transaction purchase prices (each buy is a price observation) with
+    explicit entries in manual_prices.csv. Explicit entries win on conflict."""
+    frames = []
+    if os.path.exists(paths["transactions"]):
+        txn = pd.read_csv(paths["transactions"])
+        if not txn.empty and {"DATE", "TICKER", "PURCHASE_PRICE"}.issubset(txn.columns):
+            t = txn[["DATE", "TICKER", "PURCHASE_PRICE"]].dropna(subset=["TICKER"]).copy()
+            t.columns = MANUAL_PRICE_COLUMNS
+            frames.append(t)
+    manual = _read_manual_prices(paths)
+    if not manual.empty:
+        frames.append(manual)
+    if not frames:
+        return pd.DataFrame(columns=MANUAL_PRICE_COLUMNS)
+    combined = pd.concat(frames, ignore_index=True)
+    combined["DATE"] = combined["DATE"].astype(str)
+    combined["TICKER"] = combined["TICKER"].astype(str)
+    combined["PRICE"] = combined["PRICE"].astype(float)
+    # Explicit manual entries appear last, so keep="last" lets them win.
+    combined = combined.drop_duplicates(subset=["DATE", "TICKER"], keep="last")
+    return combined.reset_index(drop=True)
+
+
+def add_manual_price(paths, date_str, ticker, price):
+    """Append (or update) a manual price for a ticker on a date. Returns the row.
+
+    Manual prices are the source of truth for manually-priced holdings; they are
+    tracked in git and merged into price_history.csv on refresh."""
+    df = _read_manual_prices(paths)
+    date_str = str(date_str)
+    ticker = str(ticker)
+    price = round(float(price), 2)
+    mask = (df["DATE"].astype(str) == date_str) & (df["TICKER"].astype(str) == ticker)
+    df = df[~mask]
+    new_row = pd.DataFrame([[date_str, ticker, price]], columns=MANUAL_PRICE_COLUMNS)
+    df = pd.concat([df, new_row], ignore_index=True)
+    df = df.sort_values(["TICKER", "DATE"]).reset_index(drop=True)
+    df.to_csv(paths["manual_prices"], index=False)
+    return [date_str, ticker, price]
+
+
+def sync_manual_prices(paths):
+    """Merge manual price points into price_history.csv as a wide date×ticker frame.
+
+    Sources both transaction purchase prices and explicit manual_prices.csv
+    entries. Manual values take precedence over any existing cached value for the
+    same (date, ticker). No-op for normal (yfinance-priced) portfolios.
+    Returns True if price_history was written."""
+    if not is_manual_pricing(paths):
+        return False
+    manual = _manual_price_points(paths)
+    if manual.empty:
+        return False
+
+    manual = manual.copy()
+    manual["DATE"] = pd.to_datetime(manual["DATE"])
+    manual["PRICE"] = manual["PRICE"].astype(float)
+    wide = manual.pivot_table(index="DATE", columns="TICKER", values="PRICE", aggfunc="last")
+    wide.index.name = None
+
+    if os.path.exists(paths["price_history"]):
+        cached = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    else:
+        cached = pd.DataFrame()
+
+    if cached.empty:
+        combined = wide.sort_index()
+    else:
+        combined = cached.copy()
+        for ticker in wide.columns:
+            if ticker not in combined.columns:
+                combined[ticker] = pd.NA
+        # Manual values overwrite cached values for matching (date, ticker)
+        combined = combined.combine_first(wide)  # union of index/columns
+        for ticker in wide.columns:
+            combined.loc[wide.index, ticker] = wide[ticker]
+        combined = combined.sort_index()
+
+    os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
+    combined.to_csv(paths["price_history"])
+    return True
 
 
 def _ensure_file(path):
@@ -918,7 +1052,10 @@ def update_prices(paths, max_retries=3):
     Returns dict with status, last_updated, and optional current_prices for intraday."""
     import time
 
-    all_tickers = sorted(_get_all_tickers(paths))
+    # Manually-priced tickers are never fetched from yfinance; their values come
+    # from sync_manual_prices. Only benchmark/normal tickers are fetched here.
+    manual_tickers = _manual_tickers(paths)
+    all_tickers = sorted(t for t in _get_all_tickers(paths) if t not in manual_tickers)
     if not all_tickers:
         close_date = _last_market_close()
         return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
@@ -926,7 +1063,8 @@ def update_prices(paths, max_retries=3):
     close_date = _last_market_close()
     market_open = _is_market_open()
 
-    # Load existing cache
+    # Load existing cache; freshness is judged on fetched tickers only, since
+    # manual tickers may carry dates the market never traded.
     if os.path.exists(paths["price_history"]):
         raw = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
         cached = raw[~raw.index.duplicated(keep="last")]
@@ -935,7 +1073,12 @@ def update_prices(paths, max_retries=3):
     else:
         cached = pd.DataFrame()
 
-    cache_current = (not cached.empty and cached.index.max().date() >= close_date)
+    fetched_cols = [t for t in all_tickers if not cached.empty and t in cached.columns]
+    if fetched_cols:
+        fetched_dates = cached[fetched_cols].dropna(how="all").index
+        cache_current = (len(fetched_dates) > 0 and fetched_dates.max().date() >= close_date)
+    else:
+        cache_current = False
 
     # If cache covers last close and market is open, fetch live intraday prices
     if cache_current and market_open:
@@ -975,11 +1118,18 @@ def update_prices(paths, max_retries=3):
     # If cache is current and market is closed, nothing to do
     if cache_current:
         return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
-    # Backfill: determine start date for historical fetch
+    # Backfill: determine start date for historical fetch. Base the resume point
+    # on the fetched tickers' last date, not the whole cache — a manual portfolio
+    # may hold manual price dates beyond the last benchmark date.
     port_df = read_csv(paths["portfolio"])
     earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
-    if not cached.empty:
-        start = (cached.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    fetched_last = None
+    if fetched_cols:
+        fetched_idx = cached[fetched_cols].dropna(how="all").index
+        if len(fetched_idx):
+            fetched_last = fetched_idx.max()
+    if fetched_last is not None:
+        start = (fetched_last + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     elif earliest is not None:
         start = earliest.strftime("%Y-%m-%d")
     else:
@@ -1289,6 +1439,10 @@ def refresh_data(paths):
     except Exception:
         pass
     result = update_prices(paths)
+    try:
+        sync_manual_prices(paths)
+    except Exception:
+        pass
     try:
         history = compute_daily_values(paths)
         result["chart_points"] = len(history)
