@@ -30,6 +30,7 @@ def setup_teardown(tmp_path):
         "data_dir": str(data_dir),
         "transactions": str(test_portfolio / "transactions.csv"),
         "manual_prices": str(test_portfolio / "manual_prices.csv"),
+        "manual_dividends": str(test_portfolio / "dividends_received.csv"),
         "portfolio": str(data_dir / "portfolio.csv"),
         "shadow_voo": str(data_dir / "shadow_voo.csv"),
         "shadow_qqq": str(data_dir / "shadow_qqq.csv"),
@@ -956,6 +957,63 @@ class TestManualPricing:
         assert "Flagship" not in captured.get("tickers", [])
 
 
+class TestManualDividends:
+    def test_empty_when_no_file(self):
+        assert portfolio_engine.manual_dividends_by_ticker(_paths()) == {}
+
+    def test_add_manual_dividend_creates_file(self):
+        row = portfolio_engine.add_manual_dividend(_paths(), "2026-07-09", "Income", 2.97)
+        assert row == ["2026-07-09", "Income", 2.97]
+        df = pd.read_csv(_paths()["manual_dividends"])
+        assert list(df.columns) == portfolio_engine.MANUAL_DIVIDEND_COLUMNS
+        assert df.iloc[0]["AMOUNT"] == 2.97
+
+    def test_sums_by_ticker(self):
+        portfolio_engine.add_manual_dividend(_paths(), "2026-04-02", "Income", 0.02)
+        portfolio_engine.add_manual_dividend(_paths(), "2026-07-09", "Income", 2.97)
+        portfolio_engine.add_manual_dividend(_paths(), "2026-07-09", "Flagship", 0.26)
+        totals = portfolio_engine.manual_dividends_by_ticker(_paths())
+        assert totals == {"Income": 2.99, "Flagship": 0.26}
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_enrich_adds_lump_sum_dividends(self, mock_price):
+        _write_transaction("2025-01-02", "FUND", 10.0, 100.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        enriched, val, divs = portfolio_engine.enrich_portfolio(
+            port_df, current_prices={"FUND": 11.0},
+            manual_dividends={"FUND": 5.0})
+        assert divs == 5.0
+        assert enriched.iloc[0]["TOTAL_DIVIDENDS"] == 5.0
+        # gain = value + dividends - invested = 1100 + 5 - 1000
+        assert enriched.iloc[0]["GAIN_LOSS"] == 105.0
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_lump_sum_allocated_across_rows_by_shares(self, mock_price):
+        # Two buys of the same fund; lump-sum dividend splits by share weight and
+        # the per-row amounts sum exactly to the total (no rounding drift).
+        _write_transaction("2025-01-02", "FUND", 10.0, 30.0)
+        _write_transaction("2025-01-03", "FUND", 10.0, 10.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        enriched, val, divs = portfolio_engine.enrich_portfolio(
+            port_df, current_prices={"FUND": 10.0},
+            manual_dividends={"FUND": 4.0})
+        assert divs == 4.0
+        # 30/40 and 10/40 of $4.00
+        assert round(enriched.iloc[0]["TOTAL_DIVIDENDS"], 2) == 3.0
+        assert round(enriched.iloc[1]["TOTAL_DIVIDENDS"], 2) == 1.0
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_no_manual_dividends_leaves_totals_unchanged(self, mock_price):
+        _write_transaction("2025-01-02", "FUND", 10.0, 100.0)
+        portfolio_engine.sync(_paths())
+        port_df = portfolio_engine.read_csv(_paths()["portfolio"])
+        _, _, divs = portfolio_engine.enrich_portfolio(
+            port_df, current_prices={"FUND": 11.0}, manual_dividends={})
+        assert divs == 0.0
+
+
 class TestVectorizedPortfolioValues:
     def test_empty_portfolio(self):
         prices = pd.DataFrame({"AAPL": [100.0]}, index=pd.date_range("2025-01-02", periods=1))
@@ -1050,6 +1108,54 @@ class TestComputeDailyValues:
         assert len(result) == 2
         assert result[-1]["DATE"] == "2025-01-03"
         assert result[-1]["MAIN"] == 1150.0
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_forward_fills_holding_without_recent_price(self, mock_price):
+        """A holding priced only on early dates (manual portfolios) must carry its
+        last known price forward rather than collapsing to 0 on later days."""
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        # MSFT has no price after 01-02; VOO/QQQ trade every day.
+        dates = pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06"])
+        prices = pd.DataFrame({
+            "MSFT": [100.0, float("nan"), float("nan")],
+            "VOO": [500.0, 505.0, 510.0],
+            "QQQ": [400.0, 405.0, 410.0],
+        }, index=dates)
+        prices.to_csv(_paths()["price_history"])
+        result = portfolio_engine.compute_daily_values(_paths())
+        # Value holds at 10 × $100 for every day, never drops to 0.
+        assert [r["MAIN"] for r in result] == [1000.0, 1000.0, 1000.0]
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_delta_path_forward_fills_stale_holding(self, mock_price):
+        """The delta-cache branch must forward-fill when the cache's last date is
+        beyond the holding's last real price, so the delta slice starts on an
+        all-NaN row. This is the Fundrise $0 chart bug: benchmarks price daily and
+        push the cache past the manual holding's last transaction date.
+        """
+        _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
+        portfolio_engine.sync(_paths())
+        # Seed cache: MSFT priced only on 01-02, VOO priced through 01-06 so the
+        # cached daily values extend past MSFT's last real price.
+        seed = pd.DataFrame({
+            "MSFT": [100.0, float("nan"), float("nan")],
+            "VOO": [500.0, 505.0, 510.0],
+            "QQQ": [400.0, 405.0, 410.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06"]))
+        seed.to_csv(_paths()["price_history"])
+        portfolio_engine.compute_daily_values(_paths())
+        # Extend by one benchmark-only day (01-07). The delta slice begins at the
+        # cache's last date (01-06), where MSFT is NaN — must not zero out.
+        extended = pd.DataFrame({
+            "MSFT": [100.0, float("nan"), float("nan"), float("nan")],
+            "VOO": [500.0, 505.0, 510.0, 515.0],
+            "QQQ": [400.0, 405.0, 410.0, 415.0],
+        }, index=pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]))
+        extended.to_csv(_paths()["price_history"])
+        result = portfolio_engine.compute_daily_values(_paths())
+        assert result[-1]["DATE"] == "2025-01-07"
+        assert result[-1]["MAIN"] == 1000.0  # forward-filled, not 0
 
 
 class TestGetCachedDailyValues:

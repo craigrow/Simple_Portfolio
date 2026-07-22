@@ -11,6 +11,7 @@ PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfo
 
 COLUMNS = ["DATE", "TICKER", "PURCHASE_PRICE", "SHARES_PURCHASED", "TOTAL_VALUE"]
 MANUAL_PRICE_COLUMNS = ["DATE", "TICKER", "PRICE"]
+MANUAL_DIVIDEND_COLUMNS = ["DATE", "TICKER", "AMOUNT"]
 DEFAULT_PORTFOLIO_ID = "foolish_portfolio"
 BENCHMARK_SHADOW_PATHS = {
     "VOO": "shadow_voo",
@@ -27,6 +28,7 @@ def get_paths(portfolio_id):
         "data_dir": data,
         "transactions": os.path.join(root, "transactions.csv"),
         "manual_prices": os.path.join(root, "manual_prices.csv"),
+        "manual_dividends": os.path.join(root, "dividends_received.csv"),
         "portfolio": os.path.join(data, "portfolio.csv"),
         "shadow_voo": os.path.join(data, "shadow_voo.csv"),
         "shadow_qqq": os.path.join(data, "shadow_qqq.csv"),
@@ -124,6 +126,43 @@ def _manual_price_points(paths):
     # Explicit manual entries appear last, so keep="last" lets them win.
     combined = combined.drop_duplicates(subset=["DATE", "TICKER"], keep="last")
     return combined.reset_index(drop=True)
+
+
+def _read_manual_dividends(paths):
+    """Read the lump-sum dividends_received.csv (empty if absent).
+
+    Unlike yfinance dividends (per-share amounts), these are total dollars
+    received for a holding on a date — the form brokerages like Fundrise report."""
+    if not os.path.exists(paths["manual_dividends"]):
+        return pd.DataFrame(columns=MANUAL_DIVIDEND_COLUMNS)
+    df = pd.read_csv(paths["manual_dividends"])
+    for col in MANUAL_DIVIDEND_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.Series(dtype="object")
+    return df[MANUAL_DIVIDEND_COLUMNS]
+
+
+def manual_dividends_by_ticker(paths):
+    """Return {ticker: total_dollars_received} from dividends_received.csv."""
+    df = _read_manual_dividends(paths)
+    if df.empty:
+        return {}
+    df = df.copy()
+    df["AMOUNT"] = df["AMOUNT"].astype(float)
+    return df.groupby(df["TICKER"].astype(str))["AMOUNT"].sum().round(2).to_dict()
+
+
+def add_manual_dividend(paths, date_str, ticker, amount):
+    """Append a lump-sum dividend received for a ticker on a date. Returns the row."""
+    df = _read_manual_dividends(paths)
+    date_str = str(date_str)
+    ticker = str(ticker)
+    amount = round(float(amount), 2)
+    new_row = pd.DataFrame([[date_str, ticker, amount]], columns=MANUAL_DIVIDEND_COLUMNS)
+    df = pd.concat([df, new_row], ignore_index=True)
+    df = df.sort_values(["DATE", "TICKER"]).reset_index(drop=True)
+    df.to_csv(paths["manual_dividends"], index=False)
+    return [date_str, ticker, amount]
 
 
 def add_manual_price(paths, date_str, ticker, price):
@@ -647,8 +686,12 @@ def get_adjusted_shares(ticker, shares, purchase_date, splits_df):
     return round(shares * ratio, 5) if ratio != 0 else shares
 
 
-def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_prices=None, paths=None):
-    """Add CURRENT_SHARES, CURRENT_VALUE, and TOTAL_DIVIDENDS columns."""
+def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_prices=None, paths=None, manual_dividends=None):
+    """Add CURRENT_SHARES, CURRENT_VALUE, and TOTAL_DIVIDENDS columns.
+
+    manual_dividends is an optional {ticker: total_dollars} of lump-sum dividends
+    received (e.g. Fundrise). Each ticker's total is distributed across its rows
+    proportional to current shares and added to per-share (yfinance) dividends."""
     if portfolio_df.empty:
         return portfolio_df, 0.0, 0.0
 
@@ -656,6 +699,8 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
         splits_df = _read_splits(paths) if paths else pd.DataFrame(columns=["TICKER", "DATE", "RATIO"])
     if dividends_df is None:
         dividends_df = _read_dividends(paths) if paths else pd.DataFrame(columns=["TICKER", "DATE", "AMOUNT"])
+    if manual_dividends is None:
+        manual_dividends = manual_dividends_by_ticker(paths) if paths else {}
     if current_prices is None:
         tickers = portfolio_df["TICKER"].unique().tolist()
         current_prices = _fetch_current_prices(tickers)
@@ -672,11 +717,23 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
         dividends_df = dividends_df.copy()
         dividends_df["_date"] = pd.to_datetime(dividends_df["DATE"])
 
+    # Total adjusted shares per ticker, to allocate lump-sum dividends by weight.
+    ticker_total_shares = {}
+    if manual_dividends:
+        for _, row in portfolio_df.iterrows():
+            ticker = row["TICKER"]
+            adj = get_adjusted_shares(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df)
+            ticker_total_shares[ticker] = ticker_total_shares.get(ticker, 0.0) + adj
+
     for _, row in portfolio_df.iterrows():
         ticker = row["TICKER"]
         adj = get_adjusted_shares(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df)
         price = current_prices.get(ticker, 0.0)
         divs = get_total_dividends(ticker, row["SHARES_PURCHASED"], row["DATE"], splits_df, dividends_df)
+        # Add this row's share of any lump-sum dividends received for the ticker.
+        lump = manual_dividends.get(ticker, 0.0)
+        if lump and ticker_total_shares.get(ticker, 0.0) > 0:
+            divs += lump * (adj / ticker_total_shares[ticker])
         current_shares.append(adj)
         current_values.append(round(adj * price, 2))
         total_dividends.append(divs)
@@ -931,6 +988,12 @@ def compute_daily_values(paths):
     prices_df = prices_df.loc[earliest:]
     if prices_df.empty:
         return []
+
+    # Forward-fill so holdings priced only on transaction dates (e.g. manual
+    # portfolios whose latest price predates today) carry their last known price
+    # forward. Without this the delta-cache slice can start on an all-NaN row and
+    # collapse the portfolio value to 0 on recent days.
+    prices_df = prices_df.ffill()
 
     # Check cache validity
     cache_path = paths["daily_values"]

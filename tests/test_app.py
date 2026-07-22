@@ -28,6 +28,7 @@ def setup_teardown(tmp_path):
         "data_dir": str(data_dir),
         "transactions": str(test_portfolio / "transactions.csv"),
         "manual_prices": str(test_portfolio / "manual_prices.csv"),
+        "manual_dividends": str(test_portfolio / "dividends_received.csv"),
         "portfolio": str(data_dir / "portfolio.csv"),
         "shadow_voo": str(data_dir / "shadow_voo.csv"),
         "shadow_qqq": str(data_dir / "shadow_qqq.csv"),
@@ -288,6 +289,26 @@ class TestPortfolioViewRendering:
     def test_no_portfolio_view_when_empty(self, client):
         resp = client.get("/?portfolio=test_portfolio")
         assert b"Portfolio View" not in resp.data
+
+    @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
+    def test_builds_daily_values_when_cache_missing(self, mock_price, client):
+        """If daily_values cache is absent but price history + holdings exist,
+        page load rebuilds it so the chart isn't blank (no auto-refresh needed)."""
+        with open(_paths()["transactions"], "a", newline="") as f:
+            csv.writer(f).writerow(["2025-01-02", "MSFT", 100.0, 10.0])
+        dates = pd.date_range("2025-01-02", periods=2)
+        prices = pd.DataFrame({
+            "MSFT": [100.0, 105.0], "VOO": [500.0, 505.0], "QQQ": [400.0, 405.0],
+        }, index=dates)
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+        # Ensure no cache exists
+        assert not os.path.exists(_paths()["daily_values"])
+        resp = client.get("/?portfolio=test_portfolio")
+        assert resp.status_code == 200
+        # Cache was built as a side effect and is now readable
+        assert os.path.exists(_paths()["daily_values"])
+        assert len(portfolio_engine.get_cached_daily_values(_paths())) == 2
 
 
 class TestStaleDataBanner:

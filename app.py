@@ -76,15 +76,24 @@ def index():
             if last_idx is not None:
                 current_prices[col] = round(float(prices_df[col].loc[last_idx]), 2)
 
+    manual_divs = portfolio_engine.manual_dividends_by_ticker(paths)
     port_df, portfolio_value, portfolio_divs = portfolio_engine.enrich_portfolio(
-        port_df, splits_df, dividends_df, current_prices)
+        port_df, splits_df, dividends_df, current_prices, manual_dividends=manual_divs)
     shadow_voo_df, voo_value, voo_divs = portfolio_engine.enrich_portfolio(
         shadow_voo_df, splits_df, dividends_df, current_prices)
     shadow_qqq_df, qqq_value, qqq_divs = portfolio_engine.enrich_portfolio(
         shadow_qqq_df, splits_df, dividends_df, current_prices)
 
-    # Chart from cached daily values (no computation on page load)
+    # Chart from cached daily values (no computation on the fast path). If the
+    # cache is empty but we have price history and holdings — e.g. a new
+    # portfolio, or just after caches were cleared while prices are still fresh
+    # (so no auto-refresh fires) — rebuild it once so the chart isn't blank.
     history = portfolio_engine.get_cached_daily_values(paths)
+    if not history and not port_df.empty and os.path.exists(prices_path):
+        try:
+            history = portfolio_engine.compute_daily_values(paths)
+        except Exception:
+            history = []
     columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "GAIN_LOSS", "VS_VOO", "VS_QQQ", "IRR"]
     shadow_columns = portfolio_engine.COLUMNS + ["CURRENT_SHARES", "CURRENT_VALUE", "TOTAL_DIVIDENDS", "TOTAL_RETURN", "GAIN_LOSS"]
     port_df = portfolio_engine.add_comparison_columns(port_df, shadow_voo_df, shadow_qqq_df)
