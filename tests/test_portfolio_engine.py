@@ -1421,8 +1421,10 @@ class TestProvisionalBaseline:
         assert portfolio_engine._read_provisional_dates(_paths()) == {"2026-07-29"}
         portfolio_engine._clear_provisional(_paths(), "2026-07-29")
         assert portfolio_engine._read_provisional_dates(_paths()) == set()
-        # File is removed when empty.
-        assert not os.path.exists(_paths()["provisional_prices"])
+        # The file survives an empty set: its sentinel is what distinguishes a
+        # tracked cache with nothing provisional from an untracked legacy cache.
+        assert os.path.exists(_paths()["provisional_prices"])
+        assert portfolio_engine._price_cache_is_tracked(_paths())
 
     @patch.object(portfolio_engine, "_last_market_close", return_value=date(2026, 7, 30))
     @patch.object(portfolio_engine, "_is_market_open", return_value=True)
@@ -1476,6 +1478,86 @@ class TestProvisionalBaseline:
         # Stale 59.94 replaced by the real 57.75 close, and no longer provisional.
         assert round(float(cached.loc[cached.index[-1], "TQQQ"]), 2) == 57.75
         assert close_date.strftime("%Y-%m-%d") not in portfolio_engine._read_provisional_dates(_paths())
+
+    def test_legacy_cache_migration_flags_newest_row(self):
+        """A cache with no sidecar predates provisional tracking, so its newest
+        row may be a frozen intraday price. Migration adopts it as provisional."""
+        cache = pd.DataFrame(
+            {"TQQQ": [61.56, 59.94], "VOO": [680.0, 675.0], "QQQ": [570.0, 565.0]},
+            index=pd.to_datetime(["2026-07-21", "2026-07-22"]),
+        )
+        cache.to_csv(_paths()["price_history"])
+        assert not portfolio_engine._price_cache_is_tracked(_paths())
+
+        portfolio_engine._migrate_legacy_price_cache(
+            _paths(), cache, ["TQQQ", "VOO", "QQQ"])
+
+        # Only the newest row is suspect; earlier rows were already overwritten
+        # by later backfills covering their dates.
+        assert portfolio_engine._read_provisional_dates(_paths()) == {"2026-07-22"}
+        assert portfolio_engine._price_cache_is_tracked(_paths())
+
+    def test_migration_runs_only_once(self):
+        """Once tracked, a cache is never re-migrated — otherwise every run would
+        re-flag the newest row and re-fetch it forever."""
+        cache = pd.DataFrame(
+            {"TQQQ": [61.56, 57.75]},
+            index=pd.to_datetime(["2026-07-21", "2026-07-22"]),
+        )
+        cache.to_csv(_paths()["price_history"])
+        portfolio_engine._migrate_legacy_price_cache(_paths(), cache, ["TQQQ"])
+        # Real close fetched; 7/22 settles.
+        portfolio_engine._clear_provisional(_paths(), "2026-07-22")
+        assert portfolio_engine._read_provisional_dates(_paths()) == set()
+
+        # A second migration attempt must be a no-op, not a re-flag.
+        portfolio_engine._migrate_legacy_price_cache(_paths(), cache, ["TQQQ"])
+        assert portfolio_engine._read_provisional_dates(_paths()) == set()
+
+    def test_migration_on_empty_cache_marks_tracked_only(self):
+        """A fresh install has no price history. Migration should still mark the
+        cache tracked so it is not re-examined, but flag no dates."""
+        portfolio_engine._migrate_legacy_price_cache(_paths(), pd.DataFrame(), [])
+        assert portfolio_engine._price_cache_is_tracked(_paths())
+        assert portfolio_engine._read_provisional_dates(_paths()) == set()
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    @patch.object(portfolio_engine, "_last_market_close", return_value=date(2026, 7, 23))
+    def test_legacy_cache_self_heals_through_update_prices(self, mock_close, mock_open):
+        """End-to-end migration: an untracked cache holding a frozen intraday
+        price for 7/22 re-fetches that date and replaces it with the real close.
+
+        This is the prod/staging situation — those caches were written before
+        provisional tracking existed, so without migration the stale row would
+        never be corrected."""
+        self._seed_single_holding()
+        cache = pd.DataFrame(
+            {"TQQQ": [61.56, 59.94], "VOO": [680.0, 675.0], "QQQ": [570.0, 565.0]},
+            index=pd.to_datetime(["2026-07-21", "2026-07-22"]),
+        )
+        cache.to_csv(_paths()["price_history"])
+        assert not portfolio_engine._price_cache_is_tracked(_paths())
+
+        # The re-fetch must reach back to 7/22, not start at 7/23.
+        fetch_starts = []
+        real = pd.DataFrame(
+            {"TQQQ": [57.75], "VOO": [674.0], "QQQ": [564.0]},
+            index=pd.to_datetime(["2026-07-22"]),
+        )
+        real.columns = pd.MultiIndex.from_product([["Close"], ["TQQQ", "VOO", "QQQ"]])
+
+        def fake_download(tickers, **kwargs):
+            fetch_starts.append(kwargs.get("start"))
+            return real
+
+        with patch("portfolio_engine.yf.download", side_effect=fake_download):
+            portfolio_engine.update_prices(_paths())
+
+        assert fetch_starts and fetch_starts[0] == "2026-07-22"
+        cached = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        # Frozen 59.94 corrected to the real 57.75 close.
+        assert round(float(cached.loc["2026-07-22", "TQQQ"]), 2) == 57.75
+        assert portfolio_engine._read_provisional_dates(_paths()) == set()
 
     @patch.object(portfolio_engine, "_is_market_open", return_value=True)
     def test_backfill_during_market_hours_flags_today(self, mock_open):

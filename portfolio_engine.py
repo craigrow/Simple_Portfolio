@@ -488,6 +488,13 @@ def load_all(paths):
     )
 
 
+# Sentinel written as the sidecar's first line. Its presence means this price
+# cache has provisional-row tracking, so an *empty* date set can be trusted as
+# "everything is a settled close" rather than "never tracked". Without it, a
+# missing file would be ambiguous and legacy caches could not be detected.
+_PROVISIONAL_HEADER = "#v1 provisional-price-dates"
+
+
 def _read_provisional_dates(paths):
     """Return the set of date strings whose price_history rows are intraday snapshots.
 
@@ -499,9 +506,43 @@ def _read_provisional_dates(paths):
         return set()
     try:
         with open(path) as f:
-            return {line.strip() for line in f if line.strip()}
+            return {line.strip() for line in f
+                    if line.strip() and not line.startswith("#")}
     except OSError:
         return set()
+
+
+def _price_cache_is_tracked(paths):
+    """Return True if this price cache records which rows are provisional.
+
+    False means the cache predates provisional tracking, so nothing is known
+    about whether its newest row holds a real close or an intraday snapshot."""
+    path = paths.get("provisional_prices")
+    return bool(path) and os.path.exists(path)
+
+
+def _migrate_legacy_price_cache(paths, cached, fetched_cols):
+    """Establish provisional tracking for a price cache written before it existed.
+
+    A legacy cache's newest fetched row may be an intraday snapshot that was
+    frozen in as that day's close — the original bug. Which rows are affected
+    was never recorded, but only the newest one can still be wrong: any earlier
+    intraday row was already overwritten by a later backfill covering its date.
+    So treat just the newest row as provisional. It is then re-fetched on this
+    run and excluded from baselines meanwhile, and the cache self-heals at the
+    cost of one extra day of prices rather than a full history rebuild.
+
+    Older rows are left alone deliberately: rewriting all of history would be
+    slow, and the intraday-frozen row is by construction the most recent one."""
+    if _price_cache_is_tracked(paths):
+        return
+    newest = None
+    if not cached.empty and fetched_cols:
+        idx = cached[fetched_cols].dropna(how="all").index
+        if len(idx):
+            newest = max(idx).strftime("%Y-%m-%d")
+    # Write the sentinel either way, so this check runs once per cache.
+    _write_provisional_dates(paths, {newest} if newest else set())
 
 
 def _mark_provisional(paths, date_str):
@@ -512,17 +553,18 @@ def _mark_provisional(paths, date_str):
 
 
 def _write_provisional_dates(paths, dates):
-    """Persist the provisional-date set, removing the file when empty."""
+    """Persist the provisional-date set.
+
+    The file is kept even when the set is empty: the sentinel line is what marks
+    this cache as tracked, and removing it would make the cache look legacy and
+    re-trigger migration on the next run."""
     path = paths.get("provisional_prices")
     if not path:
         return
-    if not dates:
-        if os.path.exists(path):
-            os.remove(path)
-        return
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = [_PROVISIONAL_HEADER] + sorted(str(d) for d in dates)
     with open(path, "w") as f:
-        f.write("\n".join(sorted(str(d) for d in dates)) + "\n")
+        f.write("\n".join(lines) + "\n")
 
 
 def _clear_provisional(paths, date_str):
@@ -1203,8 +1245,11 @@ def update_prices(paths, max_retries=3):
     # close_date that is still provisional means the market has since closed
     # without us re-fetching, so the cache is NOT current — otherwise the stale
     # mid-session price would be frozen into history as that day's close.
-    provisional_dates = _read_provisional_dates(paths)
     fetched_cols = [t for t in all_tickers if not cached.empty and t in cached.columns]
+    # A cache written before provisional tracking existed may already have an
+    # intraday price frozen into its newest row. Adopt it here so it re-fetches.
+    _migrate_legacy_price_cache(paths, cached, fetched_cols)
+    provisional_dates = _read_provisional_dates(paths)
     if fetched_cols:
         fetched_dates = cached[fetched_cols].dropna(how="all").index
         settled_dates = [d for d in fetched_dates

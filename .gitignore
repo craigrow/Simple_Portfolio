@@ -4,5 +4,7 @@ __pycache__/
 .pytest_cache/
 flask.log
 portfolios/*/data/*.csv
+portfolios/*/data/*.csv.meta
+portfolios/*/data/*.provisional
 !portfolios/*/data/.gitkeep
 portfolios/*/backup_*/
