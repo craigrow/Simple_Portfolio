@@ -3,6 +3,7 @@ import sys
 import csv
 import json
 import pytest
+from datetime import date
 from unittest.mock import patch
 import pandas as pd
 
@@ -37,6 +38,7 @@ def setup_teardown(tmp_path):
         "splits": str(data_dir / "splits.csv"),
         "dividends": str(data_dir / "dividends.csv"),
         "price_history": str(data_dir / "price_history.csv"),
+        "provisional_prices": str(data_dir / "price_history.provisional"),
         "config": str(test_portfolio / "config.json"),
         "last_updated": str(data_dir / "last_updated.txt"),
         "daily_values": str(data_dir / "daily_values.csv"),
@@ -1345,6 +1347,192 @@ class TestGetMarketComparison:
         df.to_csv(_paths()["daily_values"], index=False)
         result = portfolio_engine.get_market_comparison(1000, 900, 800, _paths())
         assert result is None
+
+
+class TestProvisionalBaseline:
+    """Regression tests for the stale-intraday-baseline bug.
+
+    Reproduces the TQQQ case: a mid-session price got frozen into price_history
+    as if it were a close, so today's-change was measured against it instead of
+    the real prior close. See project memory 'stale-intraday-baseline-bug'."""
+
+    def _write_daily_values(self, rows):
+        df = pd.DataFrame(rows, columns=["DATE", "MAIN", "VOO", "QQQ"])
+        df.to_csv(_paths()["daily_values"], index=False)
+
+    def _seed_single_holding(self):
+        """1 share of TQQQ; benchmarks present so load_all/vectorized work."""
+        _write_transaction("2026-07-28", "TQQQ", 61.56, 1.0)
+        with open(_paths()["shadow_voo"], "w", newline="") as f:
+            w = csv.writer(f); w.writerow(portfolio_engine.COLUMNS)
+            w.writerow(["2026-07-28", "VOO", 680.0, 0.0905, 61.56])
+        with open(_paths()["shadow_qqq"], "w", newline="") as f:
+            w = csv.writer(f); w.writerow(portfolio_engine.COLUMNS)
+            w.writerow(["2026-07-28", "QQQ", 570.0, 0.108, 61.56])
+        portfolio_engine.sync(_paths())
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_provisional_row_excluded_from_baseline(self, mock_open):
+        """A provisional (intraday) row must not be used as the prior close."""
+        self._seed_single_holding()
+        # 7/28 real close 61.56; 7/29 real close 57.75; a stale intraday
+        # snapshot of 59.94 was frozen in for 7/29 and flagged provisional.
+        prices = pd.DataFrame(
+            {"TQQQ": [61.56, 59.94], "VOO": [680.0, 675.0], "QQQ": [570.0, 565.0]},
+            index=pd.to_datetime(["2026-07-28", "2026-07-29"]),
+        )
+        prices.to_csv(_paths()["price_history"])
+        portfolio_engine._mark_provisional(_paths(), "2026-07-29")
+        self._write_daily_values([
+            ["2026-07-28", 61.56, 61.56, 61.56],
+            ["2026-07-29", 59.94, 59.94, 59.94],
+        ])
+        # Current price 63.30 (today's live TQQQ). Correct baseline is the 7/28
+        # close of 61.56 — NOT the stale 7/29 intraday 59.94.
+        result = portfolio_engine.get_market_comparison(63.30, 63.30, 63.30, _paths())
+        assert round(result["portfolio_change"], 2) == 1.74   # 63.30 - 61.56
+        # The bug produced 63.30 - 59.94 = 3.36; assert we did NOT get that.
+        assert round(result["portfolio_change"], 2) != 3.36
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_settled_row_is_valid_baseline(self, mock_open):
+        """Once 7/29 holds its real close, it becomes the baseline again."""
+        self._seed_single_holding()
+        prices = pd.DataFrame(
+            {"TQQQ": [61.56, 57.75], "VOO": [680.0, 675.0], "QQQ": [570.0, 565.0]},
+            index=pd.to_datetime(["2026-07-28", "2026-07-29"]),
+        )
+        prices.to_csv(_paths()["price_history"])
+        # No provisional flag -> both rows are settled closes.
+        self._write_daily_values([
+            ["2026-07-28", 61.56, 61.56, 61.56],
+            ["2026-07-29", 57.75, 57.75, 57.75],
+        ])
+        # Market closed: latest close 57.75 vs prior close 61.56.
+        result = portfolio_engine.get_market_comparison(57.75, 57.75, 57.75, _paths())
+        assert round(result["portfolio_change"], 2) == -3.81  # 57.75 - 61.56
+
+    def test_mark_and_clear_provisional_roundtrip(self):
+        assert portfolio_engine._read_provisional_dates(_paths()) == set()
+        portfolio_engine._mark_provisional(_paths(), "2026-07-29")
+        assert portfolio_engine._read_provisional_dates(_paths()) == {"2026-07-29"}
+        # Marking again is idempotent.
+        portfolio_engine._mark_provisional(_paths(), "2026-07-29")
+        assert portfolio_engine._read_provisional_dates(_paths()) == {"2026-07-29"}
+        portfolio_engine._clear_provisional(_paths(), "2026-07-29")
+        assert portfolio_engine._read_provisional_dates(_paths()) == set()
+        # File is removed when empty.
+        assert not os.path.exists(_paths()["provisional_prices"])
+
+    @patch.object(portfolio_engine, "_last_market_close", return_value=date(2026, 7, 30))
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_intraday_write_marks_provisional(self, mock_open, mock_close):
+        """update_prices writing a live row must flag that date provisional."""
+        self._seed_single_holding()
+        # Cache is current through the last close so the intraday branch runs.
+        cache = pd.DataFrame(
+            {"TQQQ": [61.56], "VOO": [680.0], "QQQ": [570.0]},
+            index=pd.to_datetime(["2026-07-30"]),
+        )
+        cache.index.name = "Date"
+        cache.to_csv(_paths()["price_history"])
+        today = portfolio_engine.pd.Timestamp(
+            portfolio_engine.datetime.now(portfolio_engine.ZoneInfo("America/New_York")).date()
+        )
+        fake = pd.DataFrame(
+            {"TQQQ": [63.30], "VOO": [690.0], "QQQ": [580.0]}, index=[today]
+        )
+        fake.columns = pd.MultiIndex.from_product([["Close"], ["TQQQ", "VOO", "QQQ"]])
+        with patch("portfolio_engine.yf.download", return_value=fake):
+            portfolio_engine.update_prices(_paths())
+        # The just-written today row must be flagged provisional.
+        assert today.strftime("%Y-%m-%d") in portfolio_engine._read_provisional_dates(_paths())
+
+    @patch.object(portfolio_engine, "_last_market_close", return_value=date(2026, 7, 30))
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_stale_provisional_triggers_refetch(self, mock_open, mock_close):
+        """A provisional row for the close date must not count as cache-current,
+        so update_prices re-fetches and overwrites it with the real close."""
+        self._seed_single_holding()
+        close_date = date(2026, 7, 30)
+        # Seed a provisional intraday row for the close date.
+        cache = pd.DataFrame(
+            {"TQQQ": [59.94], "VOO": [675.0], "QQQ": [565.0]},
+            index=pd.to_datetime([close_date]),
+        )
+        cache.index.name = "Date"
+        cache.to_csv(_paths()["price_history"])
+        portfolio_engine._mark_provisional(_paths(), close_date.strftime("%Y-%m-%d"))
+        # Real close arrives on re-fetch. Backfill resumes from the last settled
+        # date (7/28), so the fetch must span both 7/28 and the corrected 7/30.
+        real = pd.DataFrame(
+            {"TQQQ": [61.56, 57.75], "VOO": [680.0, 674.0], "QQQ": [570.0, 564.0]},
+            index=pd.to_datetime(["2026-07-28", close_date]),
+        )
+        real.columns = pd.MultiIndex.from_product([["Close"], ["TQQQ", "VOO", "QQQ"]])
+        with patch("portfolio_engine.yf.download", return_value=real):
+            portfolio_engine.update_prices(_paths())
+        cached = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        # Stale 59.94 replaced by the real 57.75 close, and no longer provisional.
+        assert round(float(cached.loc[cached.index[-1], "TQQQ"]), 2) == 57.75
+        assert close_date.strftime("%Y-%m-%d") not in portfolio_engine._read_provisional_dates(_paths())
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_backfill_during_market_hours_flags_today(self, mock_open):
+        """A backfill run mid-session brings back today's in-progress bar. That
+        bar is an intraday price, so it must be flagged provisional too."""
+        self._seed_single_holding()
+        today = date.today()
+        with patch.object(portfolio_engine, "_last_market_close", return_value=today):
+            fetched = pd.DataFrame(
+                {"TQQQ": [61.56, 59.94], "VOO": [680.0, 675.0], "QQQ": [570.0, 565.0]},
+                index=pd.to_datetime(["2026-07-28", today]),
+            )
+            fetched.columns = pd.MultiIndex.from_product([["Close"], ["TQQQ", "VOO", "QQQ"]])
+            with patch("portfolio_engine.yf.download", return_value=fetched):
+                portfolio_engine.update_prices(_paths())
+        assert today.strftime("%Y-%m-%d") in portfolio_engine._read_provisional_dates(_paths())
+
+    @patch.object(portfolio_engine, "_is_market_open", return_value=True)
+    def test_end_to_end_matches_real_tqqq_move(self, mock_open):
+        """Full reproduction of the prod discrepancy, in real numbers.
+
+        On 2026-07-30 the app reported the TQQQ portfolio +5.54% while Apple
+        Stocks showed +9.61%. The cause: a 7/29 intraday snapshot of $59.94 was
+        frozen into price_history, and 63.30/59.94-1 = +5.6%. The real 7/29
+        close was $57.75, giving 63.30/57.75-1 = +9.61%."""
+        shares = 604.05
+        _write_transaction("2026-07-28", "TQQQ", 61.56, shares)
+        with open(_paths()["shadow_voo"], "w", newline="") as f:
+            w = csv.writer(f); w.writerow(portfolio_engine.COLUMNS)
+            w.writerow(["2026-07-28", "VOO", 680.0, 54.68, shares * 61.56])
+        with open(_paths()["shadow_qqq"], "w", newline="") as f:
+            w = csv.writer(f); w.writerow(portfolio_engine.COLUMNS)
+            w.writerow(["2026-07-28", "QQQ", 570.0, 65.23, shares * 61.56])
+        portfolio_engine.sync(_paths())
+
+        # price_history as prod had it: 7/29 holds the stale intraday 59.94.
+        prices = pd.DataFrame(
+            {"TQQQ": [61.56, 59.94], "VOO": [680.0, 678.0], "QQQ": [570.0, 568.0]},
+            index=pd.to_datetime(["2026-07-28", "2026-07-29"]),
+        )
+        prices.to_csv(_paths()["price_history"])
+        portfolio_engine._mark_provisional(_paths(), "2026-07-29")
+        self._write_daily_values([
+            ["2026-07-28", shares * 61.56, shares * 61.56, shares * 61.56],
+            ["2026-07-29", shares * 59.94, 36000.0, 36000.0],
+        ])
+
+        live_value = round(shares * 63.30, 2)
+        result = portfolio_engine.get_market_comparison(live_value, 40000, 40000, _paths())
+
+        # Baseline must be the 7/28 close, not the 7/29 intraday snapshot.
+        baseline = live_value - result["portfolio_change"]
+        assert round(baseline, 2) == round(shares * 61.56, 2)
+        # +2.83% (63.30 vs 61.56), the true move from the last settled close.
+        assert result["portfolio_pct"] == pytest.approx(2.83, abs=0.02)
+        # The bug measured against 59.94, reporting the ~5.6% the user saw.
+        assert result["portfolio_pct"] != pytest.approx(5.61, abs=0.02)
 
 
 class TestGetGainersLosers:

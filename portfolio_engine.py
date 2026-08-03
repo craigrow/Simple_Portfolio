@@ -35,6 +35,7 @@ def get_paths(portfolio_id):
         "splits": os.path.join(data, "splits.csv"),
         "dividends": os.path.join(data, "dividends.csv"),
         "price_history": os.path.join(data, "price_history.csv"),
+        "provisional_prices": os.path.join(data, "price_history.provisional"),
         "last_updated": os.path.join(data, "last_updated.txt"),
         "daily_values": os.path.join(data, "daily_values.csv"),
         "config": os.path.join(root, "config.json"),
@@ -354,9 +355,9 @@ def invalidate_daily_values(paths):
 def invalidate_all_caches(paths):
     """Nuclear option — clear all cached data so everything is rebuilt."""
     _invalidate_daily_values(paths)
-    for key in ["price_history", "splits", "portfolio", "shadow_voo", "shadow_qqq",
-                "dividends"]:
-        if os.path.exists(paths[key]):
+    for key in ["price_history", "provisional_prices", "splits", "portfolio",
+                "shadow_voo", "shadow_qqq", "dividends"]:
+        if paths.get(key) and os.path.exists(paths[key]):
             os.remove(paths[key])
 
 
@@ -485,6 +486,68 @@ def load_all(paths):
         read_csv(paths["shadow_voo"]),
         read_csv(paths["shadow_qqq"]),
     )
+
+
+def _read_provisional_dates(paths):
+    """Return the set of date strings whose price_history rows are intraday snapshots.
+
+    A provisional row was written while the market was open, so it holds a
+    mid-session price rather than that day's official close. It must never be
+    used as a prior-close baseline, and must be re-fetched once the day closes."""
+    path = paths.get("provisional_prices")
+    if not path or not os.path.exists(path):
+        return set()
+    try:
+        with open(path) as f:
+            return {line.strip() for line in f if line.strip()}
+    except OSError:
+        return set()
+
+
+def _mark_provisional(paths, date_str):
+    """Record that price_history's row for date_str is an intraday snapshot."""
+    dates = _read_provisional_dates(paths)
+    dates.add(str(date_str))
+    _write_provisional_dates(paths, dates)
+
+
+def _write_provisional_dates(paths, dates):
+    """Persist the provisional-date set, removing the file when empty."""
+    path = paths.get("provisional_prices")
+    if not path:
+        return
+    if not dates:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("\n".join(sorted(str(d) for d in dates)) + "\n")
+
+
+def _clear_provisional(paths, date_str):
+    """Drop date_str from the provisional set (its real close has been stored)."""
+    dates = _read_provisional_dates(paths)
+    if str(date_str) in dates:
+        dates.discard(str(date_str))
+        _write_provisional_dates(paths, dates)
+
+
+def _settled_prices(prices_df, paths, before_date=None):
+    """Return prices_df with provisional (intraday) rows removed.
+
+    Optionally also drop rows on or after before_date. The result contains only
+    official closes, so its last row is a valid prior-close baseline."""
+    if prices_df.empty:
+        return prices_df
+    result = prices_df
+    provisional = _read_provisional_dates(paths)
+    if provisional:
+        keep = [d.strftime("%Y-%m-%d") not in provisional for d in result.index]
+        result = result[keep]
+    if before_date is not None:
+        result = result[result.index.date < before_date]
+    return result
 
 
 def _is_market_open():
@@ -1136,10 +1199,17 @@ def update_prices(paths, max_retries=3):
     else:
         cached = pd.DataFrame()
 
+    # Provisional rows hold intraday snapshots, not official closes. A row for
+    # close_date that is still provisional means the market has since closed
+    # without us re-fetching, so the cache is NOT current — otherwise the stale
+    # mid-session price would be frozen into history as that day's close.
+    provisional_dates = _read_provisional_dates(paths)
     fetched_cols = [t for t in all_tickers if not cached.empty and t in cached.columns]
     if fetched_cols:
         fetched_dates = cached[fetched_cols].dropna(how="all").index
-        cache_current = (len(fetched_dates) > 0 and fetched_dates.max().date() >= close_date)
+        settled_dates = [d for d in fetched_dates
+                         if d.strftime("%Y-%m-%d") not in provisional_dates]
+        cache_current = (len(settled_dates) > 0 and max(settled_dates).date() >= close_date)
     else:
         cache_current = False
 
@@ -1165,13 +1235,16 @@ def update_prices(paths, max_retries=3):
                         if idx is not None:
                             live[t] = round(float(close[t].loc[idx]), 2)
                 if live:
-                    # Write today's intraday row into cache (will be overwritten at close)
+                    # Write today's intraday row into cache and flag it provisional
+                    # so it is re-fetched after the close and never used as a
+                    # prior-close baseline.
                     today = pd.Timestamp(datetime.now(ZoneInfo("America/New_York")).date())
                     intraday_row = pd.DataFrame(live, index=[today])
                     hist = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
                     hist = hist[hist.index.date != today.date()]  # remove any existing today row
                     combined = pd.concat([hist, intraday_row]).sort_index()
                     combined.to_csv(paths["price_history"])
+                    _mark_provisional(paths, today.strftime("%Y-%m-%d"))
                     _set_last_updated(paths, intraday=True)
                     return {"status": "ok"}
         except Exception:
@@ -1189,8 +1262,12 @@ def update_prices(paths, max_retries=3):
     fetched_last = None
     if fetched_cols:
         fetched_idx = cached[fetched_cols].dropna(how="all").index
-        if len(fetched_idx):
-            fetched_last = fetched_idx.max()
+        # Resume from the last *settled* date. Resuming past a provisional row
+        # would leave its intraday price in place permanently.
+        settled_idx = [d for d in fetched_idx
+                       if d.strftime("%Y-%m-%d") not in provisional_dates]
+        if len(settled_idx):
+            fetched_last = max(settled_idx)
     if fetched_last is not None:
         start = (fetched_last + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     elif earliest is not None:
@@ -1237,6 +1314,22 @@ def update_prices(paths, max_retries=3):
                 combined = new_data.sort_index()
             os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
             combined.to_csv(paths["price_history"])
+            # Any date we just fetched a real close for is no longer provisional.
+            if provisional_dates:
+                fetched_real = {d.strftime("%Y-%m-%d") for d in new_data.index}
+                remaining_provisional = provisional_dates - fetched_real
+                if remaining_provisional != provisional_dates:
+                    _write_provisional_dates(paths, remaining_provisional)
+                    provisional_dates = remaining_provisional
+            # A backfill run during market hours brings back today's in-progress
+            # bar, which is an intraday price wearing a close's clothing. Flag it
+            # so it gets re-fetched and can never serve as a prior-close baseline.
+            if market_open:
+                today_str = datetime.now(ZoneInfo("America/New_York")).date().strftime("%Y-%m-%d")
+                if any(d.strftime("%Y-%m-%d") == today_str for d in new_data.index):
+                    _mark_provisional(paths, today_str)
+            # Rebuild the chart cache so it reflects corrected closes.
+            _invalidate_daily_values(paths)
 
     if remaining:
         return {"status": "incomplete", "failed_tickers": remaining}
@@ -1245,9 +1338,44 @@ def update_prices(paths, max_retries=3):
     return {"status": "ok", "last_updated": ts}
 
 
+def _baseline_date(prices_df, paths, market_open):
+    """Return the date whose closes are the correct 'previous close' baseline.
+
+    This is the latest date in price_history that (a) holds an official close
+    rather than an intraday snapshot, and (b) precedes the session currently
+    being measured. Returns None when no such date exists.
+
+    Using the latest *settled* close — rather than positional indexing like
+    iloc[-2] — is what keeps today's change correct. A provisional row holds a
+    mid-session price, and comparing against it understates or overstates the
+    day's move by however far that snapshot sat from the real close."""
+    if prices_df.empty:
+        return None
+    settled = _settled_prices(prices_df, paths)
+    if settled.empty:
+        return None
+    if market_open:
+        # Measuring today's in-progress session: baseline is the last close
+        # strictly before today.
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        prior = settled[settled.index.date < today]
+    else:
+        # Measuring the most recent completed session: baseline is the last
+        # settled close strictly before that session's date.
+        latest = prices_df.index.max().date()
+        prior = settled[settled.index.date < latest]
+    if prior.empty:
+        return None
+    return prior.index.max()
+
+
 def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
     """Compare current portfolio values to prior close for the 'Vs. the Market Today' card.
-    Returns dict with changes and deltas, or None if insufficient data."""
+    Returns dict with changes and deltas, or None if insufficient data.
+
+    The baseline is always the most recent *official close* preceding the session
+    being measured. Intraday snapshots are excluded, so a mid-session price can
+    never masquerade as a previous close."""
     cache_path = paths["daily_values"]
     if not os.path.exists(cache_path):
         return None
@@ -1256,37 +1384,45 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
         return None
 
     market_open = _is_market_open()
-    if market_open:
+
+    def _daily_values_base():
+        """Fallback baseline from the cached daily-value series."""
+        last_date = pd.to_datetime(df.iloc[-1]["DATE"]).date()
         today = datetime.now(ZoneInfo("America/New_York")).date()
+        return df.iloc[-2] if last_date == today else df.iloc[-1]
 
-        def _daily_values_base():
-            last_date = pd.to_datetime(df.iloc[-1]["DATE"]).date()
-            return df.iloc[-2] if last_date == today else df.iloc[-1]
+    price_history_path = paths["price_history"]
+    prices_df = pd.DataFrame()
+    if os.path.exists(price_history_path):
+        prices_df = pd.read_csv(price_history_path, index_col=0, parse_dates=True)
 
-        price_history_path = paths["price_history"]
-        if os.path.exists(price_history_path):
-            prices_df = pd.read_csv(price_history_path, index_col=0, parse_dates=True)
-            prior_prices = prices_df[prices_df.index.date < today]
-            if not prior_prices.empty:
-                splits_df = _read_splits(paths)
-                dividends_df = _read_dividends(paths)
-                port_df, voo_df, qqq_df = load_all(paths)
-                main_vals = _vectorized_portfolio_values(port_df, splits_df, dividends_df, prior_prices)
-                voo_vals = _vectorized_portfolio_values(voo_df, splits_df, dividends_df, prior_prices)
-                qqq_vals = _vectorized_portfolio_values(qqq_df, splits_df, dividends_df, prior_prices)
-                port_base = main_vals.iloc[-1]
-                voo_base = voo_vals.iloc[-1]
-                qqq_base = qqq_vals.iloc[-1]
-            else:
-                prev = _daily_values_base()
-                port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
-        else:
-            prev = _daily_values_base()
-            port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
+    base_date = _baseline_date(prices_df, paths, market_open) if not prices_df.empty else None
+
+    if base_date is not None:
+        # Value every holding at the baseline date's closes. Slicing through
+        # base_date (rather than passing a single row) lets the existing
+        # forward-fill carry prices for holdings that did not trade that day.
+        base_prices = prices_df.loc[:base_date]
+        splits_df = _read_splits(paths)
+        dividends_df = _read_dividends(paths)
+        port_df, voo_df, qqq_df = load_all(paths)
+        port_base = _vectorized_portfolio_values(port_df, splits_df, dividends_df, base_prices).iloc[-1]
+        voo_base = _vectorized_portfolio_values(voo_df, splits_df, dividends_df, base_prices).iloc[-1]
+        qqq_base = _vectorized_portfolio_values(qqq_df, splits_df, dividends_df, base_prices).iloc[-1]
+        # Compare current (live or latest) totals against the settled baseline.
+        port_change = portfolio_total - port_base
+        voo_change = voo_total - voo_base
+        qqq_change = qqq_total - qqq_base
+    elif market_open:
+        # No price history but market is open: compare live totals against the
+        # last cached daily value that is not today's in-progress row.
+        prev = _daily_values_base()
+        port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
         port_change = portfolio_total - port_base
         voo_change = voo_total - voo_base
         qqq_change = qqq_total - qqq_base
     else:
+        # Market closed, no price history: last cached close vs the prior one.
         last = df.iloc[-1]
         prev = df.iloc[-2]
         port_base, voo_base, qqq_base = prev["MAIN"], prev["VOO"], prev["QQQ"]
@@ -1312,15 +1448,25 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
 
 def get_gainers_losers(portfolio_summary_data, paths, n=5):
     """Return top/bottom n by dollar change and by percent change.
-    Returns (dollar_gainers, dollar_losers, pct_gainers, pct_losers)."""
+    Returns (dollar_gainers, dollar_losers, pct_gainers, pct_losers).
+
+    Uses the same settled prior-close baseline as get_market_comparison, so the
+    per-ticker percentages agree with the portfolio's headline change."""
     prices_path = paths["price_history"]
     if not os.path.exists(prices_path) or not portfolio_summary_data:
         return [], [], [], []
     prices_df = pd.read_csv(prices_path, index_col=0, parse_dates=True)
     if len(prices_df) < 2:
         return [], [], [], []
-    today_prices = prices_df.iloc[-1]
-    prev_prices = prices_df.iloc[-2]
+
+    base_date = _baseline_date(prices_df, paths, _is_market_open())
+    if base_date is None:
+        return [], [], [], []
+    # Latest prices available (may be an intraday snapshot — that is correct for
+    # the current side of the comparison), against the last settled close.
+    today_prices = prices_df.ffill().iloc[-1]
+    prev_prices = prices_df.loc[:base_date].ffill().iloc[-1]
+
     changes = []
     for row in portfolio_summary_data:
         ticker = row["TICKER"]
