@@ -1821,3 +1821,60 @@ class TestBaseballStats:
             stats = portfolio_engine.get_baseball_stats(_paths(), benchmark="VOO")
 
         assert stats["integrity"]["ok"] is True
+
+
+class TestCachedClosingPriceCoverage:
+    """Regression tests for shadow rows priced off a stale forward-filled close.
+
+    Observed on 2026-08-07: a QLD buy produced VOO/QQQ shadow rows priced at the
+    2026-08-03 closes, because the price cache ended at 08-03 and the cached
+    lookup forward-filled its newest row onto a later date instead of reporting a
+    miss. Forward-fill is correct *inside* the cached range (the gap means the
+    market was shut) but not past its newest row, where the cache knows nothing."""
+
+    def _seed_cache(self, dates, voo_prices):
+        prices = pd.DataFrame({"VOO": voo_prices}, index=pd.to_datetime(dates))
+        prices.index.name = "Date"
+        prices.to_csv(_paths()["price_history"])
+
+    def test_returns_none_beyond_newest_cached_row(self):
+        self._seed_cache(["2026-07-31", "2026-08-03"], [690.0, 696.4])
+        assert portfolio_engine._get_cached_closing_price(
+            _paths(), "VOO", "2026-08-07") is None
+
+    def test_exact_date_hit_inside_cache(self):
+        self._seed_cache(["2026-07-31", "2026-08-03"], [690.0, 696.4])
+        assert portfolio_engine._get_cached_closing_price(
+            _paths(), "VOO", "2026-08-03") == 696.4
+
+    def test_forward_fill_still_used_for_closed_market_inside_range(self):
+        """A Saturday between two cached closes must use the prior close."""
+        self._seed_cache(["2026-08-03", "2026-08-07"], [696.4, 710.71])
+        assert portfolio_engine._get_cached_closing_price(
+            _paths(), "VOO", "2026-08-05") == 696.4
+
+    def test_provisional_row_is_not_used_as_cached_close(self):
+        """An intraday snapshot is not a close, so it cannot satisfy a lookup."""
+        self._seed_cache(["2026-08-03", "2026-08-07"], [696.4, 705.0])
+        portfolio_engine._mark_provisional(_paths(), "2026-08-07")
+        assert portfolio_engine._get_cached_closing_price(
+            _paths(), "VOO", "2026-08-07") is None
+
+    def test_shadow_row_fetches_when_date_beyond_cache(self):
+        """The real bug: sync must fetch, not reuse the newest cached close."""
+        self._seed_cache(["2026-07-31", "2026-08-03"], [690.0, 696.4])
+        with patch.object(portfolio_engine, "_get_closing_price",
+                          return_value=710.71) as fetch:
+            row = portfolio_engine._build_shadow_row(
+                "2026-08-07", "VOO", 31.13, _paths())
+        fetch.assert_called_once_with("VOO", "2026-08-07")
+        assert row[2] == 710.71
+        assert row[3] == round(31.13 / 710.71, 5)
+
+    def test_shadow_row_does_not_fetch_when_cache_covers_date(self):
+        self._seed_cache(["2026-07-31", "2026-08-03"], [690.0, 696.4])
+        with patch.object(portfolio_engine, "_get_closing_price",
+                          side_effect=AssertionError("should not fetch")):
+            row = portfolio_engine._build_shadow_row(
+                "2026-08-03", "VOO", 31.13, _paths())
+        assert row[2] == 696.4

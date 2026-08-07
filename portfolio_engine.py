@@ -262,6 +262,14 @@ def _get_closing_price(ticker, date_str):
 
 
 def _get_cached_closing_price(paths, ticker, date_str):
+    """Return the cached close for ticker on date_str, or None if not covered.
+
+    Falling back to the most recent prior close is only valid inside the range
+    the cache actually spans: there the gap means the market was shut. Past the
+    newest cached row the cache knows nothing about that date, so it must
+    report a miss and let the caller fetch, rather than forward-filling a stale
+    close onto a later day. Provisional rows hold intraday snapshots, not
+    closes, so they cannot serve as a baseline either."""
     if not os.path.exists(paths["price_history"]):
         return None
     try:
@@ -270,8 +278,23 @@ def _get_cached_closing_price(paths, ticker, date_str):
         return None
     if prices.empty or ticker not in prices.columns:
         return None
+
+    provisional = _read_provisional_dates(paths)
+    if provisional:
+        keep = ~prices.index.normalize().strftime("%Y-%m-%d").isin(provisional)
+        prices = prices.loc[keep]
+        if prices.empty:
+            return None
+
+    settled = prices[ticker].dropna()
+    if settled.empty:
+        return None
+
     target = pd.Timestamp(date_str).normalize()
-    prior = prices.loc[prices.index.normalize() <= target, ticker].dropna()
+    if target > settled.index.normalize().max():
+        return None
+
+    prior = settled.loc[settled.index.normalize() <= target]
     if prior.empty:
         return None
     return round(float(prior.iloc[-1]), 2)
