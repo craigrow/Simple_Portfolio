@@ -1628,7 +1628,8 @@ class TestGetGainersLosers:
         """holdings = list of (ticker, shares)"""
         return [{"TICKER": t, "SHARES_OWNED": s} for t, s in holdings]
 
-    def test_basic_ranking(self):
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_basic_ranking(self, mock_open):
         self._write_prices([
             ["2025-01-02", 100, 50, 200],
             ["2025-01-03", 110, 45, 210],
@@ -1644,7 +1645,8 @@ class TestGetGainersLosers:
         assert l[0]["TICKER"] == "GOOG"  # worst first
         assert l[0]["CHANGE"] == -100.0
 
-    def test_percentage_ranking(self):
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_percentage_ranking(self, mock_open):
         self._write_prices([
             ["2025-01-02", 100, 50, 200],
             ["2025-01-03", 110, 45, 210],
@@ -1659,7 +1661,8 @@ class TestGetGainersLosers:
         assert pl[0]["TICKER"] == "GOOG"  # worst first
         assert pl[0]["PCT"] == -10.0
 
-    def test_losers_sorted_worst_first(self):
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_losers_sorted_worst_first(self, mock_open):
         self._write_prices([
             ["2025-01-02", 100, 50, 200],
             ["2025-01-03", 95, 48, 180],
