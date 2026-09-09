@@ -1,10 +1,13 @@
 import os
 import csv
 import json
+import hashlib
+import tempfile
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas as pd
+import portfolio_replay
 
 BASE_DIR = os.path.dirname(__file__)
 PORTFOLIOS_DIR = os.environ.get("PORTFOLIOS_DIR", os.path.join(BASE_DIR, "portfolios"))
@@ -17,6 +20,7 @@ BENCHMARK_SHADOW_PATHS = {
     "VOO": "shadow_voo",
     "QQQ": "shadow_qqq",
 }
+PRICE_POLICY = "unadjusted-close-v1"
 
 
 def get_paths(portfolio_id):
@@ -36,8 +40,10 @@ def get_paths(portfolio_id):
         "dividends": os.path.join(data, "dividends.csv"),
         "price_history": os.path.join(data, "price_history.csv"),
         "provisional_prices": os.path.join(data, "price_history.provisional"),
+        "price_policy": os.path.join(data, "price_history.policy"),
         "last_updated": os.path.join(data, "last_updated.txt"),
         "daily_values": os.path.join(data, "daily_values.csv"),
+        "accounting_snapshot": os.path.join(data, "accounting_snapshot.json"),
         "config": os.path.join(root, "config.json"),
     }
 
@@ -113,6 +119,10 @@ def _manual_price_points(paths):
         txn = pd.read_csv(paths["transactions"])
         if not txn.empty and {"DATE", "TICKER", "PURCHASE_PRICE"}.issubset(txn.columns):
             t = txn[["DATE", "TICKER", "PURCHASE_PRICE"]].dropna(subset=["TICKER"]).copy()
+            t.columns = MANUAL_PRICE_COLUMNS
+            frames.append(t)
+        elif not txn.empty and {"DATE", "TICKER", "PRICE"}.issubset(txn.columns):
+            t = txn[["DATE", "TICKER", "PRICE"]].dropna(subset=["TICKER"]).copy()
             t.columns = MANUAL_PRICE_COLUMNS
             frames.append(t)
     manual = _read_manual_prices(paths)
@@ -370,6 +380,40 @@ def _invalidate_daily_values(paths):
             os.remove(path)
 
 
+def _accounting_input_fingerprint(paths):
+    """Return a stable identifier for every input that changes replay history."""
+    digest = hashlib.sha256()
+    digest.update(b"accounting-v1\0")
+    for key in (
+        "transactions", "splits", "dividends", "manual_dividends",
+        "price_history", "provisional_prices", "price_policy", "config",
+    ):
+        path = paths.get(key)
+        digest.update(key.encode("utf-8") + b"\0")
+        if not path or not os.path.exists(path):
+            digest.update(b"<missing>\0")
+            continue
+        with open(path, "rb") as source:
+            for chunk in iter(lambda: source.read(65536), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _cached_accounting_fingerprint(paths):
+    meta_path = paths["daily_values"] + ".meta"
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        with open(meta_path) as meta_file:
+            metadata = json.load(meta_file)
+        if metadata.get("mode") == "accounting-v1":
+            return metadata.get("input_sha256")
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
 def invalidate_daily_values(paths):
     """Public wrapper — force-clear the daily values cache for a portfolio."""
     _invalidate_daily_values(paths)
@@ -379,7 +423,8 @@ def invalidate_all_caches(paths):
     """Nuclear option — clear all cached data so everything is rebuilt."""
     _invalidate_daily_values(paths)
     for key in ["price_history", "provisional_prices", "splits", "portfolio",
-                "shadow_voo", "shadow_qqq", "dividends"]:
+                "shadow_voo", "shadow_qqq", "dividends", "accounting_snapshot",
+                "price_policy"]:
         if paths.get(key) and os.path.exists(paths[key]):
             os.remove(paths[key])
 
@@ -453,6 +498,13 @@ def _repair_trailing_shadow_rows(paths, portfolio):
 def sync(paths):
     """Process new transactions and update portfolio + shadow files."""
     txn = pd.read_csv(paths["transactions"])
+    if "ACTION" in txn.columns:
+        # The versioned event ledger is replayed as a whole. Legacy positional
+        # portfolio/shadow outputs must not be updated from BUY/SELL rows.
+        portfolio_replay.normalize_transactions(txn)
+        if _cached_accounting_fingerprint(paths) != _accounting_input_fingerprint(paths):
+            _invalidate_daily_values(paths)
+        return 0
     portfolio = read_csv(paths["portfolio"])
     if not portfolio.empty:
         processed_count = min(len(portfolio), len(txn))
@@ -590,6 +642,22 @@ def _write_provisional_dates(paths, dates):
         f.write("\n".join(lines) + "\n")
 
 
+def _price_policy_is_current(paths):
+    path = paths.get("price_policy") or paths["price_history"] + ".policy"
+    try:
+        with open(path) as policy_file:
+            return policy_file.read().strip() == PRICE_POLICY
+    except OSError:
+        return False
+
+
+def _write_price_policy(paths):
+    path = paths.get("price_policy") or paths["price_history"] + ".policy"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as policy_file:
+        policy_file.write(PRICE_POLICY + "\n")
+
+
 def _clear_provisional(paths, date_str):
     """Drop date_str from the provisional set (its real close has been stored)."""
     dates = _read_provisional_dates(paths)
@@ -627,7 +695,7 @@ def _is_market_open():
 def _last_market_close():
     """Return the date of the most recent market close, using yfinance data.
     Accounts for weekends and holidays automatically."""
-    data = yf.download("VOO", period="5d", progress=False)
+    data = yf.download("VOO", period="5d", progress=False, auto_adjust=False)
     if not data.empty:
         last_date = data.index[-1]
         d = last_date.date() if hasattr(last_date, 'date') else pd.Timestamp(last_date).date()
@@ -651,10 +719,18 @@ def _last_market_close():
 def _get_all_tickers(paths):
     """Return set of all tickers across all three portfolios."""
     tickers = set()
+    uses_event_ledger = False
+    if os.path.exists(paths["transactions"]):
+        source = pd.read_csv(paths["transactions"])
+        if not source.empty and "TICKER" in source.columns:
+            tickers.update(source["TICKER"].dropna().astype(str))
+            uses_event_ledger = "ACTION" in source.columns
     for path in [paths["portfolio"], paths["shadow_voo"], paths["shadow_qqq"]]:
         df = read_csv(path)
         if not df.empty:
             tickers.update(df["TICKER"].unique())
+    if tickers and uses_event_ledger:
+        tickers.update(BENCHMARK_SHADOW_PATHS)
     return tickers
 
 
@@ -935,7 +1011,8 @@ def _fetch_current_prices(tickers):
     end = pd.Timestamp.now(tz="America/New_York").normalize() + pd.Timedelta(days=1)
     start = end - pd.Timedelta(days=5)  # 5 days back to cover weekends/holidays
     data = yf.download(tickers, start=start.strftime("%Y-%m-%d"),
-                       end=end.strftime("%Y-%m-%d"), progress=False)
+                       end=end.strftime("%Y-%m-%d"), progress=False,
+                       auto_adjust=False)
     prices = {}
     if len(tickers) == 1:
         if not data.empty:
@@ -985,7 +1062,11 @@ def fetch_all_history(portfolios, splits_df, dividends_df, paths):
     frames = []
 
     if new_tickers:
-        data = yf.download(new_tickers, start=earliest.strftime("%Y-%m-%d"), progress=False)["Close"]
+        history_start = earliest - pd.Timedelta(days=7)
+        data = yf.download(
+            new_tickers, start=history_start.strftime("%Y-%m-%d"),
+            progress=False, auto_adjust=True,
+        )["Close"]
         if isinstance(data, pd.Series):
             data = data.to_frame(name=new_tickers[0])
         frames.append(data)
@@ -998,7 +1079,9 @@ def fetch_all_history(portfolios, splits_df, dividends_df, paths):
             last_cached = last_cached.tz_localize("America/New_York")
         if last_cached.date() < last_close:
             start = (last_cached + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            delta = yf.download(existing_tickers, start=start, progress=False)
+            delta = yf.download(
+                existing_tickers, start=start, progress=False, auto_adjust=True
+            )
             if not delta.empty:
                 delta_close = delta["Close"]
                 if isinstance(delta_close, pd.Series):
@@ -1096,6 +1179,40 @@ def _vectorized_portfolio_values(portfolio_df, splits_df, dividends_df, prices_d
 def compute_daily_values(paths):
     """Compute or update cached daily portfolio values for the chart.
     Uses vectorized computation. Caches to daily_values.csv."""
+    source = pd.read_csv(paths["transactions"]) if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    if not source.empty and "ACTION" in source.columns:
+        history = portfolio_replay.build_history(paths)
+        if history:
+            directory = os.path.dirname(paths["daily_values"])
+            os.makedirs(directory, exist_ok=True)
+            data_fd, data_temp = tempfile.mkstemp(
+                prefix="daily_values.", suffix=".tmp", dir=directory
+            )
+            meta_fd, meta_temp = tempfile.mkstemp(
+                prefix="daily_values_meta.", suffix=".tmp", dir=directory
+            )
+            try:
+                os.close(data_fd)
+                pd.DataFrame(history).to_csv(data_temp, index=False)
+                with os.fdopen(meta_fd, "w") as meta_file:
+                    json.dump({
+                        "mode": "accounting-v1",
+                        "input_sha256": _accounting_input_fingerprint(paths),
+                    }, meta_file, sort_keys=True)
+                os.replace(data_temp, paths["daily_values"])
+                os.replace(meta_temp, paths["daily_values"] + ".meta")
+            except Exception:
+                try:
+                    os.close(meta_fd)
+                except OSError:
+                    pass
+                for temp_path in (data_temp, meta_temp):
+                    try:
+                        os.unlink(temp_path)
+                    except FileNotFoundError:
+                        pass
+                raise
+        return history
     port_df = read_csv(paths["portfolio"])
     voo_df = read_csv(paths["shadow_voo"])
     qqq_df = read_csv(paths["shadow_qqq"])
@@ -1253,6 +1370,33 @@ def update_prices(paths, max_retries=3):
 
     close_date = _last_market_close()
     market_open = _is_market_open()
+    source_df = (
+        pd.read_csv(paths["transactions"])
+        if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    )
+    uses_event_ledger = not source_df.empty and "ACTION" in source_df.columns
+    if not source_df.empty and "DATE" in source_df.columns:
+        earliest = pd.to_datetime(source_df["DATE"]).min()
+    else:
+        port_df = read_csv(paths["portfolio"])
+        earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
+    event_price_dates = {}
+    event_current_tickers = set(all_tickers)
+    if uses_event_ledger:
+        normalized = portfolio_replay.normalize_transactions(source_df)
+        open_lots = {}
+        for event in normalized:
+            if event["action"] == "BUY":
+                open_lots[event["transaction_id"]] = event["ticker"]
+                if event["ticker"] in all_tickers:
+                    event_price_dates.setdefault(event["ticker"], pd.Timestamp(event["date"]))
+            else:
+                open_lots.pop(event["lot_id"], None)
+        event_current_tickers = (
+            set(open_lots.values()) & set(all_tickers)
+        ) | set(BENCHMARK_SHADOW_PATHS)
+        for benchmark in BENCHMARK_SHADOW_PATHS:
+            event_price_dates[benchmark] = earliest
 
     # Load existing cache; freshness is judged on fetched tickers only, since
     # manual tickers may carry dates the market never traded.
@@ -1264,6 +1408,15 @@ def update_prices(paths, max_retries=3):
     else:
         cached = pd.DataFrame()
 
+    price_policy_rebuild = uses_event_ledger and not _price_policy_is_current(paths)
+    if price_policy_rebuild:
+        # Old caches used yfinance's adjusted Close while this application also
+        # posted dividends and splits explicitly. Preserve authoritative manual
+        # price columns, but rebuild every provider-priced column from raw Close.
+        keep = [ticker for ticker in manual_tickers if ticker in cached.columns]
+        cached = cached[keep].copy() if keep else pd.DataFrame()
+        _write_provisional_dates(paths, set())
+
     # Provisional rows hold intraday snapshots, not official closes. A row for
     # close_date that is still provisional means the market has since closed
     # without us re-fetching, so the cache is NOT current — otherwise the stale
@@ -1273,7 +1426,41 @@ def update_prices(paths, max_retries=3):
     # intraday price frozen into its newest row. Adopt it here so it re-fetches.
     _migrate_legacy_price_cache(paths, cached, fetched_cols)
     provisional_dates = _read_provisional_dates(paths)
-    if fetched_cols:
+    event_history_incomplete = False
+    if uses_event_ledger and earliest is not None:
+        # Replay needs a settled price for every market ticker on or before the
+        # first transaction date. A cache that starts later can look current but
+        # cannot correctly price the first contribution or decision benchmark.
+        for ticker, required_date in event_price_dates.items():
+            if ticker not in cached.columns:
+                event_history_incomplete = True
+                break
+            settled = pd.to_numeric(cached[ticker], errors="coerce").dropna()
+            settled = settled[
+                [d.strftime("%Y-%m-%d") not in provisional_dates for d in settled.index]
+            ]
+            prior = settled.loc[settled.index <= required_date]
+            if prior.empty or (required_date.date() - prior.index[-1].date()).days > 7:
+                event_history_incomplete = True
+                break
+
+    if uses_event_ledger:
+        current_by_ticker = []
+        for ticker in event_current_tickers:
+            if ticker not in cached.columns:
+                current_by_ticker.append(False)
+                continue
+            settled = pd.to_numeric(cached[ticker], errors="coerce").dropna()
+            settled_dates = [
+                d for d in settled.index
+                if d.strftime("%Y-%m-%d") not in provisional_dates
+            ]
+            current_by_ticker.append(
+                bool(settled_dates) and max(settled_dates).date() >= close_date
+            )
+        cache_current = bool(current_by_ticker) and all(current_by_ticker)
+        cache_current = cache_current and not event_history_incomplete
+    elif fetched_cols:
         fetched_dates = cached[fetched_cols].dropna(how="all").index
         settled_dates = [d for d in fetched_dates
                          if d.strftime("%Y-%m-%d") not in provisional_dates]
@@ -1291,6 +1478,7 @@ def update_prices(paths, max_retries=3):
                 start=start.strftime("%Y-%m-%d"),
                 end=end.strftime("%Y-%m-%d"),
                 progress=False,
+                auto_adjust=not uses_event_ledger,
             )
             if not data.empty:
                 close = data["Close"]
@@ -1325,10 +1513,8 @@ def update_prices(paths, max_retries=3):
     # Backfill: determine start date for historical fetch. Base the resume point
     # on the fetched tickers' last date, not the whole cache — a manual portfolio
     # may hold manual price dates beyond the last benchmark date.
-    port_df = read_csv(paths["portfolio"])
-    earliest = pd.to_datetime(port_df["DATE"]).min() if not port_df.empty else None
     fetched_last = None
-    if fetched_cols:
+    if fetched_cols and not event_history_incomplete:
         fetched_idx = cached[fetched_cols].dropna(how="all").index
         # Resume from the last *settled* date. Resuming past a provisional row
         # would leave its intraday price in place permanently.
@@ -1339,19 +1525,22 @@ def update_prices(paths, max_retries=3):
     if fetched_last is not None:
         start = (fetched_last + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     elif earliest is not None:
-        start = earliest.strftime("%Y-%m-%d")
+        start = (earliest - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
     else:
         return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
 
     # Fetch with retries for missing tickers
-    remaining = list(all_tickers)
+    remaining = list(all_tickers if event_history_incomplete else event_current_tickers)
     new_frames = []
 
     for attempt in range(max_retries):
         if not remaining:
             break
         try:
-            data = yf.download(remaining, start=start, progress=False)
+            data = yf.download(
+                remaining, start=start, progress=False,
+                auto_adjust=not uses_event_ledger,
+            )
             if data.empty:
                 break
             close = data["Close"]
@@ -1359,9 +1548,16 @@ def update_prices(paths, max_retries=3):
                 close = close.to_frame(name=remaining[0])
             new_frames.append(close)
             # Check which tickers got data for the close_date
-            got = [t for t in remaining if t in close.columns
-                   and close[t].last_valid_index() is not None
-                   and close[t].last_valid_index().date() >= close_date]
+            got = [
+                t for t in remaining
+                if t in close.columns
+                and close[t].last_valid_index() is not None
+                and (
+                    not uses_event_ledger
+                    or t not in event_current_tickers
+                    or close[t].last_valid_index().date() >= close_date
+                )
+            ]
             remaining = [t for t in remaining if t not in got]
         except Exception:
             pass
@@ -1375,9 +1571,10 @@ def update_prices(paths, max_retries=3):
         new_data = new_data[~new_data.index.duplicated(keep="last")]
         if not new_data.empty:
             if not cached.empty:
-                combined = pd.concat([cached, new_data])
-                combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
-                combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+                # Fresh provider values win where present, while cached/manual
+                # values survive on the same date in columns absent from the
+                # download (notably Fundrise prices beside VOO/QQQ closes).
+                combined = new_data.combine_first(cached).sort_index()
             else:
                 combined = new_data.sort_index()
             os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
@@ -1402,6 +1599,8 @@ def update_prices(paths, max_retries=3):
     if remaining:
         return {"status": "incomplete", "failed_tickers": remaining}
 
+    if uses_event_ledger:
+        _write_price_policy(paths)
     ts = _set_last_updated(paths, close_date=close_date)
     return {"status": "ok", "last_updated": ts}
 
@@ -1466,7 +1665,27 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
 
     base_date = _baseline_date(prices_df, paths, market_open) if not prices_df.empty else None
 
-    if base_date is not None:
+    source = (
+        pd.read_csv(paths["transactions"])
+        if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    )
+    uses_event_ledger = not source.empty and "ACTION" in source.columns
+
+    if uses_event_ledger and base_date is not None:
+        # Event-ledger history already includes sales, actual cash, and the
+        # continuous benchmarks. Legacy generated holding files cannot provide
+        # a correct baseline once a lot has been sold.
+        dated = df.copy()
+        dated["DATE"] = pd.to_datetime(dated["DATE"])
+        prior = dated[dated["DATE"] <= base_date]
+        if prior.empty:
+            return None
+        base = prior.iloc[-1]
+        port_base, voo_base, qqq_base = base["MAIN"], base["VOO"], base["QQQ"]
+        port_change = portfolio_total - port_base
+        voo_change = voo_total - voo_base
+        qqq_change = qqq_total - qqq_base
+    elif base_date is not None:
         # Value every holding at the baseline date's closes. Slicing through
         # base_date (rather than passing a single row) lets the existing
         # forward-fill carry prices for holdings that did not trade that day.
@@ -1690,6 +1909,65 @@ def get_baseball_stats(paths, benchmark="VOO"):
     if benchmark not in BENCHMARK_SHADOW_PATHS:
         return _empty_baseball_stats(benchmark, integrity_ok=False, message=f"Unsupported benchmark: {benchmark}")
 
+    source = pd.read_csv(paths["transactions"]) if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    if not source.empty and "ACTION" in source.columns:
+        snapshot = build_accounting_snapshot(paths)
+        stats = _empty_baseball_stats(benchmark)
+        wins = losses = ties = bases = 0
+        bucket_map = {}
+        for decision in snapshot["decisions"]:
+            actual_value = float(decision["actual"]["total_return_value"])
+            benchmark_value = float(decision[benchmark]["total_return_value"])
+            if actual_value > benchmark_value:
+                wins += 1
+            elif actual_value < benchmark_value:
+                losses += 1
+            else:
+                ties += 1
+            invested = float(decision["original_investment"])
+            if invested > 0:
+                row_bases = max(0, int(actual_value / invested) - 1)
+                bases += row_bases
+                if row_bases:
+                    bucket = bucket_map.setdefault(
+                        row_bases, {"bases": row_bases, "count": 0, "tickers": []}
+                    )
+                    bucket["count"] += 1
+                    if decision["ticker"] not in bucket["tickers"]:
+                        bucket["tickers"].append(decision["ticker"])
+        denominator = wins + losses
+        stats["batting_average"] = round(wins / denominator, 4) if denominator else None
+        stats["slugging_percentage"] = round(bases / len(snapshot["decisions"]), 4) if snapshot["decisions"] else None
+        stats["slugging_buckets"] = [bucket_map[key] for key in sorted(bucket_map)]
+        stats["counts"].update({
+            "transaction_wins": wins,
+            "transaction_losses": losses,
+            "transaction_ties": ties,
+            "slugging_bases": bases,
+            "slugging_transactions": len(snapshot["decisions"]),
+        })
+        history = get_cached_daily_values(paths)
+        if history:
+            daily = pd.DataFrame(history)
+            benchmark_column = benchmark
+            if {"MAIN", benchmark_column}.issubset(daily.columns):
+                main_pct = pd.to_numeric(daily["MAIN"], errors="coerce").pct_change()
+                benchmark_pct = pd.to_numeric(daily[benchmark_column], errors="coerce").pct_change()
+                valid = main_pct.notna() & benchmark_pct.notna()
+                daily_wins = int((main_pct[valid] > benchmark_pct[valid]).sum())
+                daily_losses = int((main_pct[valid] < benchmark_pct[valid]).sum())
+                daily_ties = int((main_pct[valid] == benchmark_pct[valid]).sum())
+                daily_denominator = daily_wins + daily_losses
+                stats["daily_win_percentage"] = (
+                    round(daily_wins / daily_denominator, 4) if daily_denominator else None
+                )
+                stats["counts"].update({
+                    "daily_wins": daily_wins,
+                    "daily_losses": daily_losses,
+                    "daily_ties": daily_ties,
+                })
+        return stats
+
     main_df = _read_existing_csv(paths["portfolio"], COLUMNS)
     benchmark_key = BENCHMARK_SHADOW_PATHS[benchmark]
     benchmark_df = _read_existing_csv(paths[benchmark_key], COLUMNS)
@@ -1702,6 +1980,32 @@ def get_baseball_stats(paths, benchmark="VOO"):
     stats["daily_win_percentage"] = daily_value
     stats["counts"].update(daily_counts)
     return stats
+
+
+def build_accounting_snapshot(paths, valuation_date=None, persist=False):
+    """Build the sell/cash/two-benchmark accounting snapshot.
+
+    This is the public boundary for the new replay engine.  Legacy helpers stay
+    available during migration, but new UI and reporting code must use this
+    snapshot rather than aggregating legacy shadow rows.
+    """
+    return portfolio_replay.build_snapshot(
+        paths, valuation_date=valuation_date, persist=persist
+    )
+
+
+def get_cached_accounting_snapshot(paths):
+    """Return the last complete accounting snapshot, or None if unavailable."""
+    snapshot_path = paths.get("accounting_snapshot") or os.path.join(
+        paths["data_dir"], "accounting_snapshot.json"
+    )
+    if not os.path.exists(snapshot_path):
+        return None
+    try:
+        with open(snapshot_path) as snapshot_file:
+            return json.load(snapshot_file)
+    except (OSError, ValueError):
+        return None
 
 
 def refresh_data(paths):
@@ -1727,4 +2031,15 @@ def refresh_data(paths):
         result = dict(result)
         result["status"] = "error"
         result["message"] = f"Prices refreshed but chart update failed: {e}"
+    source = (
+        pd.read_csv(paths["transactions"])
+        if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    )
+    if result.get("status") == "ok" and "ACTION" in source.columns:
+        try:
+            build_accounting_snapshot(paths, persist=True)
+        except Exception as e:
+            result = dict(result)
+            result["status"] = "error"
+            result["message"] = f"Prices refreshed but accounting replay failed: {e}"
     return result

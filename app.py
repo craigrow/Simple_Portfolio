@@ -6,6 +6,40 @@ import portfolio_engine
 app = Flask(__name__)
 
 
+def _decision_rows(snapshot):
+    rows = []
+    for decision in snapshot["decisions"]:
+        rows.append({
+            "LOT_ID": decision["lot_id"],
+            "STATUS": decision["status"],
+            "BUY_DATE": decision["buy_date"],
+            "TICKER": decision["ticker"],
+            "ORIGINAL_INVESTMENT": decision["original_investment"],
+            "TERMINAL_DATE": decision["terminal_date"],
+            "ACTUAL_VALUE": decision["actual"]["total_return_value"],
+            "ACTUAL_GAIN": decision["actual"]["gain_loss"],
+            "ACTUAL_XIRR": decision["actual"]["xirr"],
+            "VOO_VALUE": decision["VOO"]["total_return_value"],
+            "VS_VOO": decision["vs_voo"],
+            "VOO_XIRR": decision["VOO"]["xirr"],
+            "QQQ_VALUE": decision["QQQ"]["total_return_value"],
+            "VS_QQQ": decision["vs_qqq"],
+            "QQQ_XIRR": decision["QQQ"]["xirr"],
+        })
+    return rows
+
+
+def _holding_rows(snapshot):
+    return [{
+        "TICKER": holding["ticker"],
+        "SHARES_OWNED": holding["shares"],
+        "COST_BASIS": holding["cost_basis"],
+        "CURRENT_VALUE": holding["current_value"],
+        "DIVIDENDS": holding["distributions"],
+        "GAIN_LOSS": holding["gain_loss"],
+    } for holding in snapshot["actual"]["holdings"]]
+
+
 def _refresh_all_portfolios(portfolios):
     results = {}
     failed = []
@@ -45,7 +79,8 @@ def index():
                                voo_value=0, qqq_value=0, portfolio_divs=0,
                                voo_divs=0, qqq_divs=0, portfolio_invested=0,
                                voo_invested=0, qqq_invested=0, history=[],
-                               auto_refresh=False)
+                               auto_refresh=False, accounting=None,
+                               accounting_error=None, decisions=[])
     if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
         portfolio_id = portfolios[0][0]
 
@@ -75,6 +110,75 @@ def index():
             last_idx = prices_df[col].last_valid_index()
             if last_idx is not None:
                 current_prices[col] = round(float(prices_df[col].loc[last_idx]), 2)
+
+    source_df = pd.read_csv(paths["transactions"])
+    if not source_df.empty and "ACTION" in source_df.columns:
+        accounting_error = None
+        try:
+            accounting = portfolio_engine.build_accounting_snapshot(paths, persist=True)
+        except Exception as exc:
+            accounting = portfolio_engine.get_cached_accounting_snapshot(paths)
+            accounting_error = str(exc)
+        if accounting is not None:
+            history = portfolio_engine.get_cached_daily_values(paths)
+            if not history and os.path.exists(prices_path):
+                try:
+                    history = portfolio_engine.compute_daily_values(paths)
+                except Exception:
+                    history = []
+            portfolio_summary = _holding_rows(accounting)
+            actual = accounting["actual"]
+            voo = accounting["portfolio_benchmarks"]["VOO"]
+            qqq = accounting["portfolio_benchmarks"]["QQQ"]
+            market_today = portfolio_engine.get_market_comparison(
+                actual["total_value"], voo["total_value"], qqq["total_value"], paths,
+            )
+            gainers, losers, pct_gainers, pct_losers = portfolio_engine.get_gainers_losers(
+                portfolio_summary, paths
+            )
+            return render_template(
+                "index.html",
+                portfolios=portfolios,
+                portfolio_id=portfolio_id,
+                portfolio_name=portfolio_name,
+                accounting=accounting,
+                accounting_error=accounting_error,
+                decisions=_decision_rows(accounting),
+                portfolio_summary=portfolio_summary,
+                history=history,
+                market_today=market_today,
+                gainers=gainers,
+                losers=losers,
+                pct_gainers=pct_gainers,
+                pct_losers=pct_losers,
+                last_updated=portfolio_engine.get_last_updated(paths),
+                needs_refresh=portfolio_engine.needs_refresh(paths),
+                auto_refresh=portfolio_engine.should_auto_refresh(paths),
+                portfolio=[], shadow_voo=[], shadow_qqq=[], columns=[], shadow_columns=[],
+                portfolio_value=actual["total_value"], voo_value=voo["total_value"],
+                qqq_value=qqq["total_value"], portfolio_divs=0, voo_divs=0, qqq_divs=0,
+                portfolio_invested=actual["cumulative_contributions"],
+                voo_invested=voo["cumulative_contributions"],
+                qqq_invested=qqq["cumulative_contributions"],
+            )
+        # Never fall through to the legacy shadow calculation for an event
+        # ledger. Without a last-known-good snapshot, show an explicit empty
+        # state and the replay error until the data is corrected/refreshed.
+        return render_template(
+            "index.html",
+            portfolios=portfolios, portfolio_id=portfolio_id,
+            portfolio_name=portfolio_name, accounting=None,
+            accounting_error=accounting_error, decisions=[],
+            portfolio_summary=[], history=[], market_today=None,
+            gainers=[], losers=[], pct_gainers=[], pct_losers=[],
+            last_updated=portfolio_engine.get_last_updated(paths),
+            needs_refresh=portfolio_engine.needs_refresh(paths),
+            auto_refresh=portfolio_engine.should_auto_refresh(paths),
+            portfolio=[], shadow_voo=[], shadow_qqq=[], columns=[], shadow_columns=[],
+            portfolio_value=0, voo_value=0, qqq_value=0,
+            portfolio_divs=0, voo_divs=0, qqq_divs=0,
+            portfolio_invested=0, voo_invested=0, qqq_invested=0,
+        )
 
     manual_divs = portfolio_engine.manual_dividends_by_ticker(paths)
     port_df, portfolio_value, portfolio_divs = portfolio_engine.enrich_portfolio(
@@ -134,6 +238,9 @@ def index():
         last_updated=portfolio_engine.get_last_updated(paths),
         needs_refresh=portfolio_engine.needs_refresh(paths),
         auto_refresh=portfolio_engine.should_auto_refresh(paths),
+        accounting=None,
+        accounting_error=None,
+        decisions=[],
     )
 
 

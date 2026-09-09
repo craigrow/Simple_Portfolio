@@ -381,6 +381,52 @@ class TestComparisonColumns:
         assert b"Shadow QQQ" in resp.data
 
 
+class TestAccountingReplayView:
+    def test_event_ledger_renders_continuous_and_decision_benchmarks(self, client):
+        with open(_paths()["transactions"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID"])
+            writer.writerow(["B000001", "2025-01-01", "BUY", "XYZ", 10, 100, ""])
+            writer.writerow(["S000001", "2025-02-01", "SELL", "XYZ", 15, 100, "B000001"])
+            writer.writerow(["B000002", "2025-03-01", "BUY", "ABC", 15, 100, ""])
+        prices = pd.DataFrame({
+            "XYZ": [10.0, 15.0, 15.0],
+            "ABC": [float("nan"), float("nan"), 15.0],
+            "VOO": [100.0, 120.0, 120.0],
+            "QQQ": [200.0, 240.0, 240.0],
+        }, index=pd.to_datetime(["2025-01-01", "2025-02-01", "2025-03-01"]))
+        prices.to_csv(_paths()["price_history"])
+
+        response = client.get("/?portfolio=test_portfolio")
+
+        assert response.status_code == 200
+        assert b"VOO Benchmark" in response.data
+        assert b"QQQ Benchmark" in response.data
+        assert b"Since-inception XIRR" in response.data
+        assert b"B000001" in response.data
+        assert b"CLOSED" in response.data
+        snapshot_path = os.path.join(_paths()["data_dir"], "accounting_snapshot.json")
+        assert os.path.exists(snapshot_path)
+
+    @patch.object(portfolio_engine, "should_auto_refresh", return_value=False)
+    @patch.object(portfolio_engine, "needs_refresh", return_value=True)
+    def test_event_ledger_without_valid_snapshot_shows_replay_error(
+        self, mock_needs_refresh, mock_auto_refresh, client
+    ):
+        with open(_paths()["transactions"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID",
+            ])
+            writer.writerow(["B000001", "2025-01-01", "BUY", "XYZ", 10, 100, ""])
+
+        response = client.get("/?portfolio=test_portfolio")
+
+        assert response.status_code == 200
+        assert b"Accounting replay warning" in response.data
+        assert b"No cached price history" in response.data
+
+
 class TestDateSorting:
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
     def test_auto_sort_uses_date_parse(self, mock_price, client):

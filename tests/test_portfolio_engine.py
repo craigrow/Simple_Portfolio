@@ -715,6 +715,9 @@ class TestUpdatePrices:
         dates = pd.date_range(end=close_date, periods=3)
         cache = pd.DataFrame({"AAPL": [100.0, 101.0, 102.0]}, index=dates)
         cache.to_csv(_paths()["price_history"])
+        # This fixture represents a current tracked cache, not a legacy cache
+        # whose newest row must first be treated as a provisional snapshot.
+        portfolio_engine._write_provisional_dates(_paths(), set())
         # Write a portfolio with AAPL
         _write_transaction("2025-01-02", "AAPL", 100.0, 10.0)
         portfolio_engine.sync(_paths())
@@ -725,6 +728,74 @@ class TestUpdatePrices:
         """No tickers in portfolio → immediate ok."""
         result = portfolio_engine.update_prices(_paths())
         assert result["status"] == "ok"
+
+    @patch.object(portfolio_engine, "_last_market_close", return_value=date(2025, 1, 10))
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_event_ledger_backfills_prior_close_even_when_cache_is_current(
+        self, mock_open, mock_close
+    ):
+        with open(_paths()["transactions"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID",
+            ])
+            writer.writerow(["B000001", "2025-01-01", "BUY", "XYZ", 10, 100, ""])
+        cache = pd.DataFrame(
+            {"XYZ": [11.0], "VOO": [101.0], "QQQ": [201.0], "Manual": [42.0]},
+            index=pd.to_datetime(["2025-01-10"]),
+        )
+        cache.to_csv(_paths()["price_history"])
+        portfolio_engine._write_provisional_dates(_paths(), set())
+        portfolio_engine._write_price_policy(_paths())
+        fetched = pd.DataFrame(
+            {
+                "XYZ": [9.0, 11.0],
+                "VOO": [99.0, 101.0],
+                "QQQ": [199.0, 201.0],
+            },
+            index=pd.to_datetime(["2024-12-31", "2025-01-10"]),
+        )
+        fetched.columns = pd.MultiIndex.from_product(
+            [["Close"], ["XYZ", "VOO", "QQQ"]]
+        )
+
+        with patch("portfolio_engine.yf.download", return_value=fetched) as download:
+            result = portfolio_engine.update_prices(_paths())
+
+        assert result["status"] == "ok"
+        assert download.call_args.kwargs["start"] == "2024-12-25"
+        assert download.call_args.kwargs["auto_adjust"] is False
+        history = pd.read_csv(_paths()["price_history"], index_col=0, parse_dates=True)
+        assert history.index.min() == pd.Timestamp("2024-12-31")
+        assert history.loc[pd.Timestamp("2025-01-10"), "Manual"] == 42.0
+
+
+class TestEventLedgerCache:
+    def _write_event_ledger(self, price=10):
+        with open(_paths()["transactions"], "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID",
+            ])
+            writer.writerow(["B000001", "2025-01-01", "BUY", "XYZ", price, 100, ""])
+
+    def test_sync_preserves_matching_daily_cache_and_invalidates_changed_ledger(self):
+        self._write_event_ledger()
+        pd.DataFrame([
+            {"DATE": "2025-01-01", "MAIN": 1000, "VOO": 1000, "QQQ": 1000},
+        ]).to_csv(_paths()["daily_values"], index=False)
+        with open(_paths()["daily_values"] + ".meta", "w") as meta:
+            json.dump({
+                "mode": "accounting-v1",
+                "input_sha256": portfolio_engine._accounting_input_fingerprint(_paths()),
+            }, meta)
+
+        portfolio_engine.sync(_paths())
+        assert os.path.exists(_paths()["daily_values"])
+
+        self._write_event_ledger(price=11)
+        portfolio_engine.sync(_paths())
+        assert not os.path.exists(_paths()["daily_values"])
 
     def test_dedup_cached_index(self):
         """Cached CSV with duplicate dates should not crash."""
