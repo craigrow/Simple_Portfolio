@@ -252,20 +252,18 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         {% if accounting %}
         <table class="auto-sort">
             <thead><tr>
-                <th class="sortable text-left">Lot</th><th class="sortable text-left">Status</th>
                 <th class="sortable text-left">Buy Date</th><th class="sortable text-left">Ticker</th>
-                <th class="sortable text-right">Invested</th><th class="sortable text-left">Through</th>
+                <th class="sortable text-right">Invested</th>
                 <th class="sortable text-right">Actual Value</th><th class="sortable text-right">Actual Gain</th>
                 <th class="sortable text-right">Actual XIRR</th><th class="sortable text-right">vs VOO</th>
                 <th class="sortable text-right">VOO XIRR</th><th class="sortable text-right">vs QQQ</th>
-                <th class="sortable text-right">QQQ XIRR</th>
+                <th class="sortable text-right">QQQ XIRR</th><th class="sortable text-left">Sell Date</th>
+                <th class="sortable text-left">Status</th>
             </tr></thead>
             <tbody>{% for row in decisions %}
                 <tr>
-                    <td class="text-left">{{ row.LOT_ID }}</td><td class="text-left">{{ row.STATUS }}</td>
                     <td class="text-left">{{ row.BUY_DATE }}</td><td class="text-left">{{ row.TICKER }}</td>
                     <td class="text-right">${{ "{:,.2f}".format(row.ORIGINAL_INVESTMENT) }}</td>
-                    <td class="text-left">{{ row.TERMINAL_DATE }}</td>
                     <td class="text-right">${{ "{:,.2f}".format(row.ACTUAL_VALUE) }}</td>
                     <td class="text-right {{ 'positive' if row.ACTUAL_GAIN >= 0 else 'negative' }}">{{ "+" if row.ACTUAL_GAIN >= 0 else "-" }}${{ "{:,.2f}".format(row.ACTUAL_GAIN|abs) }}</td>
                     <td class="text-right">{% if row.ACTUAL_XIRR is not none %}{{ "{:.2f}".format(row.ACTUAL_XIRR * 100) }}%{% else %}—{% endif %}</td>
@@ -273,6 +271,8 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
                     <td class="text-right">{% if row.VOO_XIRR is not none %}{{ "{:.2f}".format(row.VOO_XIRR * 100) }}%{% else %}—{% endif %}</td>
                     <td class="text-right {{ 'positive' if row.VS_QQQ >= 0 else 'negative' }}">{{ "+" if row.VS_QQQ >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_QQQ|abs) }}</td>
                     <td class="text-right">{% if row.QQQ_XIRR is not none %}{{ "{:.2f}".format(row.QQQ_XIRR * 100) }}%{% else %}—{% endif %}</td>
+                    <td class="text-left">{{ row.SELL_DATE if row.SELL_DATE else "—" }}</td>
+                    <td class="text-left">{{ row.STATUS }}</td>
                 </tr>
             {% endfor %}</tbody>
         </table>

@@ -403,8 +403,14 @@ class TestAccountingReplayView:
         assert b"VOO Benchmark" in response.data
         assert b"QQQ Benchmark" in response.data
         assert b"Since-inception XIRR" in response.data
-        assert b"B000001" in response.data
         assert b"CLOSED" in response.data
+        transactions = response.data.split(b'id="transactions"', 1)[1].split(
+            b'id="shadow-voo"', 1
+        )[0]
+        assert b">Lot<" not in transactions
+        assert b"Sell Date" in transactions
+        assert transactions.find(b"2025-03-01") < transactions.find(b"2025-01-01")
+        assert transactions.find(b"Sell Date") < transactions.find(b"Status")
         snapshot_path = os.path.join(_paths()["data_dir"], "accounting_snapshot.json")
         assert os.path.exists(snapshot_path)
 

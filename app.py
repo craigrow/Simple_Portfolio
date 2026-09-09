@@ -10,12 +10,13 @@ def _decision_rows(snapshot):
     rows = []
     for decision in snapshot["decisions"]:
         rows.append({
-            "LOT_ID": decision["lot_id"],
             "STATUS": decision["status"],
             "BUY_DATE": decision["buy_date"],
+            "SELL_DATE": (
+                decision["terminal_date"] if decision["status"] == "CLOSED" else None
+            ),
             "TICKER": decision["ticker"],
             "ORIGINAL_INVESTMENT": decision["original_investment"],
-            "TERMINAL_DATE": decision["terminal_date"],
             "ACTUAL_VALUE": decision["actual"]["total_return_value"],
             "ACTUAL_GAIN": decision["actual"]["gain_loss"],
             "ACTUAL_XIRR": decision["actual"]["xirr"],
@@ -26,7 +27,7 @@ def _decision_rows(snapshot):
             "VS_QQQ": decision["vs_qqq"],
             "QQQ_XIRR": decision["QQQ"]["xirr"],
         })
-    return rows
+    return sorted(rows, key=lambda row: row["BUY_DATE"], reverse=True)
 
 
 def _holding_rows(snapshot):
