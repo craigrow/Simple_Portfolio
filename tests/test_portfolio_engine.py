@@ -1250,6 +1250,13 @@ class TestGetCachedDailyValues:
 
 
 class TestComputeIrr:
+    def test_explicit_terminal_date_freezes_closed_investment(self):
+        irr = portfolio_engine.compute_irr(
+            100, 121, "2023-01-01", "2025-01-01"
+        )
+
+        assert irr == pytest.approx(10.0, abs=0.02)
+
     def test_positive_return(self):
         """A $100 investment now worth $121 after exactly 2 years = ~10% annualized."""
         from datetime import datetime, timedelta

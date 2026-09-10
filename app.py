@@ -9,6 +9,12 @@ app = Flask(__name__)
 def _decision_rows(snapshot):
     rows = []
     for decision in snapshot["decisions"]:
+        investment_irr = portfolio_engine.compute_irr(
+            decision["original_investment"],
+            decision["actual"]["total_return_value"],
+            decision["buy_date"],
+            decision["terminal_date"],
+        )
         rows.append({
             "STATUS": decision["status"],
             "BUY_DATE": decision["buy_date"],
@@ -19,13 +25,11 @@ def _decision_rows(snapshot):
             "ORIGINAL_INVESTMENT": decision["original_investment"],
             "ACTUAL_VALUE": decision["actual"]["total_return_value"],
             "ACTUAL_GAIN": decision["actual"]["gain_loss"],
-            "ACTUAL_XIRR": decision["actual"]["xirr"],
+            "IRR": investment_irr,
             "VOO_VALUE": decision["VOO"]["total_return_value"],
             "VS_VOO": decision["vs_voo"],
-            "VOO_XIRR": decision["VOO"]["xirr"],
             "QQQ_VALUE": decision["QQQ"]["total_return_value"],
             "VS_QQQ": decision["vs_qqq"],
-            "QQQ_XIRR": decision["QQQ"]["xirr"],
         })
     return sorted(rows, key=lambda row: row["BUY_DATE"], reverse=True)
 
@@ -131,6 +135,15 @@ def index():
             actual = accounting["actual"]
             voo = accounting["portfolio_benchmarks"]["VOO"]
             qqq = accounting["portfolio_benchmarks"]["QQQ"]
+            portfolio_divs = sum(lot["distributions"] for lot in actual["lots"])
+            voo_divs = sum(
+                event["amount"] for event in voo["events"]
+                if event["type"] == "DIVIDEND"
+            )
+            qqq_divs = sum(
+                event["amount"] for event in qqq["events"]
+                if event["type"] == "DIVIDEND"
+            )
             market_today = portfolio_engine.get_market_comparison(
                 actual["total_value"], voo["total_value"], qqq["total_value"], paths,
             )
@@ -157,7 +170,8 @@ def index():
                 auto_refresh=portfolio_engine.should_auto_refresh(paths),
                 portfolio=[], shadow_voo=[], shadow_qqq=[], columns=[], shadow_columns=[],
                 portfolio_value=actual["total_value"], voo_value=voo["total_value"],
-                qqq_value=qqq["total_value"], portfolio_divs=0, voo_divs=0, qqq_divs=0,
+                qqq_value=qqq["total_value"], portfolio_divs=portfolio_divs,
+                voo_divs=voo_divs, qqq_divs=qqq_divs,
                 portfolio_invested=actual["cumulative_contributions"],
                 voo_invested=voo["cumulative_contributions"],
                 qqq_invested=qqq["cumulative_contributions"],

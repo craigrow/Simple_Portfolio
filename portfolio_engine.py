@@ -951,12 +951,23 @@ def enrich_portfolio(portfolio_df, splits_df=None, dividends_df=None, current_pr
     return enriched, round(sum(current_values), 2), round(sum(total_dividends), 2)
 
 
-def compute_irr(invested, total_return, purchase_date_str):
-    """Annualized return (IRR) for a single transaction."""
+def compute_irr(invested, total_return, purchase_date_str, terminal_date_str=None):
+    """Annualized return for one investment using its terminal total value.
+
+    This intentionally treats dividends as part of the terminal value rather
+    than as dated interim cash flows.  ``terminal_date_str`` freezes a closed
+    investment on its sale date; legacy open-position callers continue to use
+    the current date.
+    """
     from datetime import datetime
     try:
-        days = (datetime.now() - pd.to_datetime(purchase_date_str)).days
-        if days <= 0 or invested <= 0:
+        terminal_date = (
+            pd.to_datetime(terminal_date_str)
+            if terminal_date_str is not None
+            else datetime.now()
+        )
+        days = (terminal_date - pd.to_datetime(purchase_date_str)).days
+        if days <= 0 or invested <= 0 or total_return <= 0:
             return None
         return round(((total_return / invested) ** (365.0 / days) - 1) * 100, 2)
     except Exception:

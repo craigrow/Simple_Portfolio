@@ -402,12 +402,23 @@ class TestAccountingReplayView:
         assert response.status_code == 200
         assert b"VOO Benchmark" in response.data
         assert b"QQQ Benchmark" in response.data
-        assert b"Since-inception XIRR" in response.data
+        assert b"Since-inception XIRR" not in response.data
         assert b"CLOSED" in response.data
+        cards = response.data.split(b'<div class="cards">', 1)[1].split(
+            b'<div class="chart-area">', 1
+        )[0]
+        assert b"Securities $" not in cards
+        assert cards.count(b"Dividends $") == 3
+        for card in cards.split(b'<div class="card">')[1:4]:
+            assert card.find(b"Dividends $") < card.find(b"XIRR")
         transactions = response.data.split(b'id="transactions"', 1)[1].split(
             b'id="shadow-voo"', 1
         )[0]
         assert b">Lot<" not in transactions
+        assert transactions.count(b">IRR<") == 1
+        assert b"Actual XIRR" not in transactions
+        assert b"VOO XIRR" not in transactions
+        assert b"QQQ XIRR" not in transactions
         assert b"Sell Date" in transactions
         assert transactions.find(b"2025-03-01") < transactions.find(b"2025-01-01")
         assert transactions.find(b"Sell Date") < transactions.find(b"Status")

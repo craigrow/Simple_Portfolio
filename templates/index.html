@@ -107,50 +107,38 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 
 <div class="container">
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
-    {% set main_total = portfolio_value + portfolio_divs %}
+    {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
     {% set main_pct = (main_gain / portfolio_invested * 100) if portfolio_invested > 0 else 0 %}
-    {% set voo_total = voo_value + voo_divs %}
-    {% set qqq_total = qqq_value + qqq_divs %}
+    {% set voo_total = voo_value if accounting else voo_value + voo_divs %}
+    {% set qqq_total = qqq_value if accounting else qqq_value + qqq_divs %}
 
     <div class="cards">
         <div class="card">
             <div class="card-label">Your Portfolio</div>
             <div class="card-value">${{ "{:,.0f}".format(main_total) }}</div>
             <div class="card-sub">Invested ${{ "{:,.0f}".format(portfolio_invested) }}</div>
-            {% if accounting %}
-            <div class="card-sub">Securities ${{ "{:,.2f}".format(accounting.actual.security_value) }} · Cash ${{ "{:,.2f}".format(accounting.actual.cash) }}</div>
-            <div class="card-sub">Since-inception XIRR {% if accounting.actual.xirr is not none %}{{ "{:.2f}".format(accounting.actual.xirr * 100) }}%{% else %}—{% endif %}</div>
-            {% else %}
             <div class="card-sub">Dividends ${{ "{:,.2f}".format(portfolio_divs) }}</div>
-            {% endif %}
             <div class="card-sub {{ 'positive' if main_gain >= 0 else 'negative' }}">{{ "+" if main_gain >= 0 else "-" }}${{ "{:,.2f}".format(main_gain|abs) }}</div>
+            {% if accounting %}<div class="card-sub">XIRR {% if accounting.actual.xirr is not none %}{{ "{:.2f}".format(accounting.actual.xirr * 100) }}%{% else %}—{% endif %}</div>{% endif %}
         </div>
         <div class="card">
             <div class="card-label">vs VOO (S&P 500)</div>
             <div class="card-value">${{ "{:,.0f}".format(voo_total) }}</div>
             <div class="card-sub">Invested ${{ "{:,.0f}".format(voo_invested) }}</div>
-            {% if accounting %}
-            <div class="card-sub">Securities ${{ "{:,.2f}".format(accounting.portfolio_benchmarks.VOO.security_value) }} · Cash ${{ "{:,.2f}".format(accounting.portfolio_benchmarks.VOO.cash) }}</div>
-            <div class="card-sub">Since-inception XIRR {% if accounting.portfolio_benchmarks.VOO.xirr is not none %}{{ "{:.2f}".format(accounting.portfolio_benchmarks.VOO.xirr * 100) }}%{% else %}—{% endif %}</div>
-            {% else %}
             <div class="card-sub">Dividends ${{ "{:,.2f}".format(voo_divs) }}</div>
-            {% endif %}
             {% set diff_voo = main_total - voo_total %}
             <div class="card-sub {{ 'positive' if diff_voo >= 0 else 'negative' }}">{{ "Ahead" if diff_voo >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_voo|abs) }}</div>
+            {% if accounting %}<div class="card-sub">XIRR {% if accounting.portfolio_benchmarks.VOO.xirr is not none %}{{ "{:.2f}".format(accounting.portfolio_benchmarks.VOO.xirr * 100) }}%{% else %}—{% endif %}</div>{% endif %}
         </div>
         <div class="card">
             <div class="card-label">vs QQQ (NASDAQ)</div>
             <div class="card-value">${{ "{:,.0f}".format(qqq_total) }}</div>
             <div class="card-sub">Invested ${{ "{:,.0f}".format(qqq_invested) }}</div>
-            {% if accounting %}
-            <div class="card-sub">Securities ${{ "{:,.2f}".format(accounting.portfolio_benchmarks.QQQ.security_value) }} · Cash ${{ "{:,.2f}".format(accounting.portfolio_benchmarks.QQQ.cash) }}</div>
-            <div class="card-sub">Since-inception XIRR {% if accounting.portfolio_benchmarks.QQQ.xirr is not none %}{{ "{:.2f}".format(accounting.portfolio_benchmarks.QQQ.xirr * 100) }}%{% else %}—{% endif %}</div>
-            {% else %}
             <div class="card-sub">Dividends ${{ "{:,.2f}".format(qqq_divs) }}</div>
-            {% endif %}
             {% set diff_qqq = main_total - qqq_total %}
             <div class="card-sub {{ 'positive' if diff_qqq >= 0 else 'negative' }}">{{ "Ahead" if diff_qqq >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_qqq|abs) }}</div>
+            {% if accounting %}<div class="card-sub">XIRR {% if accounting.portfolio_benchmarks.QQQ.xirr is not none %}{{ "{:.2f}".format(accounting.portfolio_benchmarks.QQQ.xirr * 100) }}%{% else %}—{% endif %}</div>{% endif %}
         </div>
         {% if market_today %}
         <div class="card">
@@ -255,9 +243,8 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
                 <th class="sortable text-left">Buy Date</th><th class="sortable text-left">Ticker</th>
                 <th class="sortable text-right">Invested</th>
                 <th class="sortable text-right">Actual Value</th><th class="sortable text-right">Actual Gain</th>
-                <th class="sortable text-right">Actual XIRR</th><th class="sortable text-right">vs VOO</th>
-                <th class="sortable text-right">VOO XIRR</th><th class="sortable text-right">vs QQQ</th>
-                <th class="sortable text-right">QQQ XIRR</th><th class="sortable text-left">Sell Date</th>
+                <th class="sortable text-right">IRR</th><th class="sortable text-right">vs VOO</th>
+                <th class="sortable text-right">vs QQQ</th><th class="sortable text-left">Sell Date</th>
                 <th class="sortable text-left">Status</th>
             </tr></thead>
             <tbody>{% for row in decisions %}
@@ -266,11 +253,9 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
                     <td class="text-right">${{ "{:,.2f}".format(row.ORIGINAL_INVESTMENT) }}</td>
                     <td class="text-right">${{ "{:,.2f}".format(row.ACTUAL_VALUE) }}</td>
                     <td class="text-right {{ 'positive' if row.ACTUAL_GAIN >= 0 else 'negative' }}">{{ "+" if row.ACTUAL_GAIN >= 0 else "-" }}${{ "{:,.2f}".format(row.ACTUAL_GAIN|abs) }}</td>
-                    <td class="text-right">{% if row.ACTUAL_XIRR is not none %}{{ "{:.2f}".format(row.ACTUAL_XIRR * 100) }}%{% else %}—{% endif %}</td>
+                    <td class="text-right">{% if row.IRR is not none %}{{ "{:.2f}".format(row.IRR) }}%{% else %}—{% endif %}</td>
                     <td class="text-right {{ 'positive' if row.VS_VOO >= 0 else 'negative' }}">{{ "+" if row.VS_VOO >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_VOO|abs) }}</td>
-                    <td class="text-right">{% if row.VOO_XIRR is not none %}{{ "{:.2f}".format(row.VOO_XIRR * 100) }}%{% else %}—{% endif %}</td>
                     <td class="text-right {{ 'positive' if row.VS_QQQ >= 0 else 'negative' }}">{{ "+" if row.VS_QQQ >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_QQQ|abs) }}</td>
-                    <td class="text-right">{% if row.QQQ_XIRR is not none %}{{ "{:.2f}".format(row.QQQ_XIRR * 100) }}%{% else %}—{% endif %}</td>
                     <td class="text-left">{{ row.SELL_DATE if row.SELL_DATE else "—" }}</td>
                     <td class="text-left">{{ row.STATUS }}</td>
                 </tr>
