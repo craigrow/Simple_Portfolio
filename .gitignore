@@ -6,5 +6,7 @@ flask.log
 portfolios/*/data/*.csv
 portfolios/*/data/*.csv.meta
 portfolios/*/data/*.provisional
+portfolios/*/data/*.policy
+portfolios/*/data/accounting_snapshot.json
 !portfolios/*/data/.gitkeep
 portfolios/*/backup_*/
