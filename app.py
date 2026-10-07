@@ -5,6 +5,10 @@ import portfolio_engine
 
 app = Flask(__name__)
 
+# Seed the directory the app actually uses, including local/no-disk hosts.
+import init_data
+init_data.seed_empty_derived_files(init_data.SEED_SRC, portfolio_engine.PORTFOLIOS_DIR)
+
 
 def _decision_rows(snapshot):
     rows = []

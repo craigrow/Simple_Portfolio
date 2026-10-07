@@ -35,6 +35,15 @@ def seed_empty_derived_files(src, dst):
     for path in glob.glob(os.path.join(src, "*", "data", "*.csv")):
         dst_path = os.path.join(dst, os.path.relpath(path, src))
         if _csv_has_data_rows(dst_path):
+            if os.path.basename(path) == "price_history.csv":
+                # Recover seed-only dates absent from a provider backfill while
+                # retaining all live prices on overlapping dates.
+                import pandas as pd
+                live = pd.read_csv(dst_path, index_col=0, parse_dates=True)
+                seed = pd.read_csv(path, index_col=0, parse_dates=True)
+                combined = live.combine_first(seed).sort_index()
+                if not combined.equals(live):
+                    combined.to_csv(dst_path)
             continue
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
         shutil.copy2(path, dst_path)
