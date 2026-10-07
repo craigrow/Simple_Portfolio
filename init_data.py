@@ -39,6 +39,14 @@ def seed_empty_derived_files(src, dst):
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
         shutil.copy2(path, dst_path)
         print(f"Seeded empty derived file {dst_path}")
+        if os.path.basename(path) == "price_history.csv":
+            # The policy and provisional dates describe this exact seeded cache.
+            # Copy them only with a new cache, never over a live cache's metadata.
+            for suffix in ("policy", "provisional"):
+                source_metadata = os.path.splitext(path)[0] + "." + suffix
+                destination_metadata = os.path.splitext(dst_path)[0] + "." + suffix
+                if os.path.exists(source_metadata):
+                    shutil.copy2(source_metadata, destination_metadata)
 
 
 def main():
@@ -49,7 +57,7 @@ def main():
     else:
         # Always sync repo-defined portfolio files so new portfolios and purchases appear on deploy
         sync_transaction_files(SRC, DST)
-        seed_empty_derived_files(SEED_SRC if os.path.isdir(SEED_SRC) else SRC, DST)
+    seed_empty_derived_files(SEED_SRC if os.path.isdir(SEED_SRC) else SRC, DST)
 
     # Ensure derived CSVs exist (portfolio.csv, shadows, prices)
     os.environ["PORTFOLIOS_DIR"] = DST

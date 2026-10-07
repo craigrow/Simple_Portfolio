@@ -62,3 +62,24 @@ def test_seed_empty_derived_files_restores_empty_csv_without_overwriting_data(tm
     with open(dst_data / "shadow_voo.csv", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[1][0] == "2026-05-19"
+
+
+def test_price_seed_preserves_prelisting_history_policy_and_live_metadata(tmp_path):
+    src = tmp_path / "src" / "vcmoney_portfolio" / "data"
+    dst = tmp_path / "dst" / "vcmoney_portfolio" / "data"
+    src.mkdir(parents=True)
+    dst.mkdir(parents=True)
+    (src / "price_history.csv").write_text(",VCX\n2025-01-16,11.24\n2026-03-19,30.00\n")
+    (src / "price_history.policy").write_text("unadjusted-close-v1\n")
+    (src / "price_history.provisional").write_text("#v1 provisional-price-dates\n2026-10-07\n")
+    init_data.seed_empty_derived_files(str(tmp_path / "src"), str(tmp_path / "dst"))
+    from portfolio_engine import _price_policy_is_current
+    assert _price_policy_is_current({"price_history": str(dst / "price_history.csv"),
+                                     "price_policy": str(dst / "price_history.policy")})
+    assert "2025-01-16,11.24" in (dst / "price_history.csv").read_text()
+    assert "2026-10-07" in (dst / "price_history.provisional").read_text()
+    (dst / "price_history.policy").write_text("live-policy\n")
+    (dst / "price_history.provisional").write_text("live-provisional\n")
+    init_data.seed_empty_derived_files(str(tmp_path / "src"), str(tmp_path / "dst"))
+    assert (dst / "price_history.policy").read_text() == "live-policy\n"
+    assert (dst / "price_history.provisional").read_text() == "live-provisional\n"
