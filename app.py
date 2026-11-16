@@ -10,16 +10,6 @@ import init_data
 init_data.seed_empty_derived_files(init_data.SEED_SRC, portfolio_engine.PORTFOLIOS_DIR)
 
 
-@app.context_processor
-def refresh_warning_context():
-    portfolios = portfolio_engine.list_portfolios()
-    pid = request.args.get("portfolio")
-    if pid not in [p[0] for p in portfolios]:
-        pid = portfolios[0][0] if portfolios else None
-    return {"refresh_warning": portfolio_engine.get_refresh_warning(
-        portfolio_engine.get_paths(pid)) if pid else ""}
-
-
 def _decision_rows(snapshot):
     rows = []
     for decision in snapshot["decisions"]:
@@ -59,17 +49,12 @@ def _holding_rows(snapshot):
     } for holding in snapshot["actual"]["holdings"]]
 
 
-def _refresh_all_portfolios(portfolios, force=False):
+def _refresh_all_portfolios(portfolios):
     results = {}
     failed = []
     incomplete = []
     for pid, _ in portfolios:
-        try:
-            paths = portfolio_engine.get_paths(pid)
-            result = (portfolio_engine.refresh_data(paths, force=True) if force
-                      else portfolio_engine.refresh_data(paths))
-        except Exception as exc:
-            result = {"status": "error", "message": str(exc)}
+        result = portfolio_engine.refresh_data(portfolio_engine.get_paths(pid))
         results[pid] = result
         status = result.get("status")
         if status == "error":
@@ -145,13 +130,11 @@ def index():
             accounting_error = str(exc)
         if accounting is not None:
             history = portfolio_engine.get_cached_daily_values(paths)
-            chart_stale = (portfolio_engine._cached_accounting_fingerprint(paths)
-                           != portfolio_engine._accounting_input_fingerprint(paths))
-            if (not history or chart_stale) and os.path.exists(prices_path) and not portfolio_engine.get_refresh_warning(paths):
+            if not history and os.path.exists(prices_path):
                 try:
                     history = portfolio_engine.compute_daily_values(paths)
-                except Exception as exc:
-                    accounting_error = f"Using previous chart: {exc}"
+                except Exception:
+                    history = []
             portfolio_summary = _holding_rows(accounting)
             actual = accounting["actual"]
             voo = accounting["portfolio_benchmarks"]["VOO"]
@@ -197,19 +180,14 @@ def index():
                 voo_invested=voo["cumulative_contributions"],
                 qqq_invested=qqq["cumulative_contributions"],
             )
-        try:
-            available = portfolio_engine.get_available_portfolio(paths)
-        except Exception as exc:
-            available = None
-            accounting_error += f"; Holdings unavailable: {exc}"
-        # Keep ledger holdings visible even when historical benchmark replay
-        # cannot produce a complete snapshot. Never turn missing prices into zero.
+        # Never fall through to the legacy shadow calculation for an event
+        # ledger. Without a last-known-good snapshot, show an explicit empty
+        # state and the replay error until the data is corrected/refreshed.
         return render_template(
             "index.html",
             portfolios=portfolios, portfolio_id=portfolio_id,
             portfolio_name=portfolio_name, accounting=None,
             accounting_error=accounting_error, decisions=[],
-            partial_portfolio=available, portfolio_unavailable=True,
             portfolio_summary=[], history=[], market_today=None,
             gainers=[], losers=[], pct_gainers=[], pct_losers=[],
             last_updated=portfolio_engine.get_last_updated(paths),
@@ -322,12 +300,17 @@ def refresh():
             return jsonify({"status": "ok", "message": "No portfolios"})
         force = request.args.get("force") == "1"
         if request.args.get("all") == "1":
-            return jsonify(_refresh_all_portfolios(portfolios, force=force))
+            if force:
+                for pid, _ in portfolios:
+                    portfolio_engine.invalidate_all_caches(
+                        portfolio_engine.get_paths(pid))
+            return jsonify(_refresh_all_portfolios(portfolios))
         if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
             portfolio_id = portfolios[0][0]
         paths = portfolio_engine.get_paths(portfolio_id)
-        result = (portfolio_engine.refresh_data(paths, force=True) if force
-                  else portfolio_engine.refresh_data(paths))
+        if force:
+            portfolio_engine.invalidate_all_caches(paths)
+        result = portfolio_engine.refresh_data(paths)
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})

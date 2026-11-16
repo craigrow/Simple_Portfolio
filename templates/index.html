@@ -99,18 +99,14 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
             </select>
         </form>
         {% endif %}
-        <span id="freshness">{% if portfolio_unavailable %}Cached quotes · dates shown per holding{% elif last_updated %}{{ last_updated }}{% else %}Not refreshed yet{% endif %}</span>
+        <span id="freshness">{% if last_updated %}{{ last_updated }}{% else %}Not refreshed yet{% endif %}</span>
         <a class="nav-link" href="/stats?portfolio={{ portfolio_id }}">Stats</a>
         <span id="refresh-status"></span>
     </div>
 </div>
 
 <div class="container">
-    {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
-    {% if portfolio_unavailable %}
-    {% include "_available_portfolio.html" %}
-    {% else %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
     {% set main_pct = (main_gain / portfolio_invested * 100) if portfolio_invested > 0 else 0 %}
@@ -320,7 +316,6 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         </table>
         {% endif %}
     </div>
-    {% endif %}
 </div>
 
 <script>
@@ -500,15 +495,7 @@ function refreshData(refreshAll) {
     fetch(refreshUrl)
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            var results = data.results || {};
-            var warnings = Object.keys(results).filter(function(pid) {
-                return results[pid].status !== "ok";
-            }).map(function(pid) {
-                return pid + ": " + (results[pid].message || "Prices unavailable; using previous data");
-            });
-            var updated = Object.keys(results).some(function(pid) { return results[pid].status === "ok"; });
-            if (data.status === "ok" || updated) {
-                if (warnings.length) sessionStorage.setItem("portfolioRefreshWarning", warnings.join("; "));
+            if (data.status === "ok") {
                 status.textContent = "Updated. Reloading…";
                 setTimeout(function() {
                     var url = new URL(window.location.href);
@@ -516,18 +503,13 @@ function refreshData(refreshAll) {
                     window.location.replace(url.toString());
                 }, 500);
             }
-            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.message || (data.failed_tickers||[]).join(", ")); }
+            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.failed_tickers||[]).join(", "); }
             else { status.textContent = "Refresh failed: " + data.message; }
         })
         .catch(function(e) { status.textContent = "Refresh failed: " + e; });
 }
 
 (function() {
-    var warning = sessionStorage.getItem("portfolioRefreshWarning");
-    if (warning) {
-        document.getElementById("refresh-status").textContent = warning;
-        sessionStorage.removeItem("portfolioRefreshWarning");
-    }
     var autoRefresh = {{ auto_refresh|tojson }};
     if (!autoRefresh) return;
     var url = new URL(window.location.href);
