@@ -106,6 +106,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 </div>
 
 <div class="container">
+    {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
@@ -495,7 +496,15 @@ function refreshData(refreshAll) {
     fetch(refreshUrl)
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.status === "ok") {
+            var results = data.results || {};
+            var warnings = Object.keys(results).filter(function(pid) {
+                return results[pid].status !== "ok";
+            }).map(function(pid) {
+                return pid + ": " + (results[pid].message || "Prices unavailable; using previous data");
+            });
+            var updated = Object.keys(results).some(function(pid) { return results[pid].status === "ok"; });
+            if (data.status === "ok" || updated) {
+                if (warnings.length) sessionStorage.setItem("portfolioRefreshWarning", warnings.join("; "));
                 status.textContent = "Updated. Reloading…";
                 setTimeout(function() {
                     var url = new URL(window.location.href);
@@ -503,13 +512,18 @@ function refreshData(refreshAll) {
                     window.location.replace(url.toString());
                 }, 500);
             }
-            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.failed_tickers||[]).join(", "); }
+            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.message || (data.failed_tickers||[]).join(", ")); }
             else { status.textContent = "Refresh failed: " + data.message; }
         })
         .catch(function(e) { status.textContent = "Refresh failed: " + e; });
 }
 
 (function() {
+    var warning = sessionStorage.getItem("portfolioRefreshWarning");
+    if (warning) {
+        document.getElementById("refresh-status").textContent = warning;
+        sessionStorage.removeItem("portfolioRefreshWarning");
+    }
     var autoRefresh = {{ auto_refresh|tojson }};
     if (!autoRefresh) return;
     var url = new URL(window.location.href);
