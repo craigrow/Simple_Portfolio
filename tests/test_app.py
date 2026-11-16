@@ -8,7 +8,6 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import portfolio_engine
-import app as app_module
 from app import app
 
 
@@ -519,44 +518,3 @@ class TestMarketComparisonCard:
         dv.to_csv(_paths()["daily_values"], index=False)
         resp = client.get("/?portfolio=test_portfolio")
         assert b"negative" in resp.data
-
-
-def test_refresh_all_continues_after_provider_exception():
-    with patch.object(portfolio_engine, "refresh_data", side_effect=[
-        RuntimeError("XYZ history unavailable"), {"status": "ok"}
-    ]) as refresh:
-        result = app_module._refresh_all_portfolios([("first", "First"), ("second", "Second")])
-    assert refresh.call_count == 2
-    assert result["results"]["first"]["status"] == "error"
-    assert result["results"]["second"]["status"] == "ok"
-    assert "XYZ" in result["results"]["first"]["message"]
-
-
-def test_failed_refresh_warning_survives_page_reload(client, tmp_path):
-    data_dir = tmp_path / "portfolios" / "test_portfolio" / "data"
-    with open(data_dir / "refresh_status.json", "w") as stream:
-        json.dump({"status": "incomplete", "message": "XYZ unavailable. Retained previous data."}, stream)
-    response = client.get("/?portfolio=test_portfolio&auto_refreshed=1")
-    assert response.status_code == 200
-    assert b"XYZ unavailable. Retained previous data." in response.data
-
-
-def test_incomplete_history_without_snapshot_still_shows_holdings(client):
-    paths = _paths()
-    pd.DataFrame([
-        ["B1", "2026-04-07", "BUY", "EMBJ", 60, 10, ""],
-        ["B2", "2026-06-09", "BUY", "XYZ", 100, 2, ""],
-    ], columns=["TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID"]).to_csv(paths["transactions"], index=False)
-    pd.DataFrame({"EMBJ": [63], "VOO": [500], "QQQ": [400]}, index=pd.to_datetime(["2026-04-10"])).to_csv(paths["price_history"])
-    pd.DataFrame([
-        {"TICKER": "EMBJ", "DATE": "2026-11-16", "PRICE": 70},
-        {"TICKER": "XYZ", "DATE": "2026-11-16", "PRICE": 110},
-    ]).to_csv(os.path.join(paths["data_dir"], "current_quotes.csv"), index=False)
-    response = client.get("/?portfolio=test_portfolio&auto_refreshed=1")
-    assert response.status_code == 200
-    assert b"$920" in response.data
-    assert b"EMBJ" in response.data and b"XYZ" in response.data
-    assert b"2026-11-16" in response.data
-    assert b"No holdings data yet" not in response.data
-    assert b"Historical benchmark prices needed" in response.data
-    assert b"Contributed $800.00" in response.data

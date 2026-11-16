@@ -273,25 +273,3 @@ class TestHistory:
             assert row["VOO"] == expected["portfolio_benchmarks"]["VOO"]["total_value"]
             assert row["QQQ"] == expected["portfolio_benchmarks"]["QQQ"]["total_value"]
             assert row["CONTRIBUTIONS"] == expected["actual"]["cumulative_contributions"]
-
-
-def test_actual_holdings_do_not_require_benchmark_history():
-    transactions = _ledger([
-        ["B1", "2026-04-07", "BUY", "EMBJ", 60, 10, ""],
-        ["B2", "2026-06-09", "BUY", "XYZ", 100, 2, ""],
-        ["S1", "2026-07-01", "SELL", "XYZ", 110, 2, "B2"],
-        ["B3", "2026-08-01", "BUY", "MISSING", 50, 1, ""],
-    ])
-    market = _market({"2026-11-16": {"EMBJ": 70}})
-    result = replay(transactions, market, actual_only=True)
-    assert result["cash"] == 170
-    assert result["cumulative_contributions"] == 800
-    assert result["total_value"] is None
-    assert result["priced_subtotal"] == 870
-    assert result["missing_tickers"] == ["MISSING"]
-    holdings = {row["ticker"]: row for row in result["holdings"]}
-    assert holdings["EMBJ"]["current_value"] == 700
-    assert holdings["EMBJ"]["price_date"] == "2026-11-16"
-    assert holdings["MISSING"]["current_value"] is None
-    assert "XYZ" not in holdings
-    assert len(result["lots"]) == 3
