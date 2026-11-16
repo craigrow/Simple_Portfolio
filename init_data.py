@@ -35,10 +35,27 @@ def seed_empty_derived_files(src, dst):
     for path in glob.glob(os.path.join(src, "*", "data", "*.csv")):
         dst_path = os.path.join(dst, os.path.relpath(path, src))
         if _csv_has_data_rows(dst_path):
+            if os.path.basename(path) == "price_history.csv":
+                # Recover seed-only dates absent from a provider backfill while
+                # retaining all live prices on overlapping dates.
+                import pandas as pd
+                live = pd.read_csv(dst_path, index_col=0, parse_dates=True)
+                seed = pd.read_csv(path, index_col=0, parse_dates=True)
+                combined = live.combine_first(seed).sort_index()
+                if not combined.equals(live):
+                    combined.to_csv(dst_path)
             continue
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
         shutil.copy2(path, dst_path)
         print(f"Seeded empty derived file {dst_path}")
+        if os.path.basename(path) == "price_history.csv":
+            # The policy and provisional dates describe this exact seeded cache.
+            # Copy them only with a new cache, never over a live cache's metadata.
+            for suffix in ("policy", "provisional"):
+                source_metadata = os.path.splitext(path)[0] + "." + suffix
+                destination_metadata = os.path.splitext(dst_path)[0] + "." + suffix
+                if os.path.exists(source_metadata):
+                    shutil.copy2(source_metadata, destination_metadata)
 
 
 def main():
@@ -49,7 +66,7 @@ def main():
     else:
         # Always sync repo-defined portfolio files so new portfolios and purchases appear on deploy
         sync_transaction_files(SRC, DST)
-        seed_empty_derived_files(SEED_SRC if os.path.isdir(SEED_SRC) else SRC, DST)
+    seed_empty_derived_files(SEED_SRC if os.path.isdir(SEED_SRC) else SRC, DST)
 
     # Ensure derived CSVs exist (portfolio.csv, shadows, prices)
     os.environ["PORTFOLIOS_DIR"] = DST
