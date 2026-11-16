@@ -2065,3 +2065,26 @@ def test_partial_intraday_quotes_keep_cached_data(missing_quote):
         assert stream.read() == old_prices
     with open(paths["last_updated"]) as stream:
         assert stream.read() == f"{prior.date()}|close"
+
+
+def test_incomplete_history_still_publishes_current_quotes():
+    paths = _paths()
+    pd.DataFrame([["B1", "2026-04-07", "BUY", "EMBJ", 60, 10, ""]], columns=[
+        "TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID"
+    ]).to_csv(paths["transactions"], index=False)
+    old = pd.DataFrame({"EMBJ": [63], "VOO": [500], "QQQ": [400]}, index=pd.to_datetime(["2026-04-10"]))
+    old.to_csv(paths["price_history"])
+    fetched = pd.DataFrame({"EMBJ": [70], "VOO": [600], "QQQ": [500]}, index=pd.to_datetime(["2026-11-16"]))
+    fetched.columns = pd.MultiIndex.from_product([["Close"], fetched.columns])
+    with patch.object(portfolio_engine, "sync_splits"), \
+         patch.object(portfolio_engine, "sync_dividends"), \
+         patch.object(portfolio_engine, "_last_market_close", return_value=date(2026, 11, 16)), \
+         patch.object(portfolio_engine, "_is_market_open", return_value=False), \
+         patch("portfolio_engine.yf.download", return_value=fetched):
+        result = portfolio_engine.refresh_data(paths)
+    assert result["status"] == "incomplete"
+    pd.testing.assert_frame_equal(pd.read_csv(paths["price_history"], index_col=0, parse_dates=True), old)
+    actual = portfolio_engine.get_available_portfolio(paths)
+    assert actual["total_value"] == 700
+    assert actual["holdings"][0]["price_date"] == "2026-11-16"
+    assert not os.path.exists(paths["last_updated"])

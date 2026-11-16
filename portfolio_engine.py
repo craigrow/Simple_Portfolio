@@ -1506,6 +1506,8 @@ def update_prices(paths, max_retries=3):
                         idx = close[t].last_valid_index()
                         if idx is not None and idx.date() == today:
                             live[t] = round(float(close[t].loc[idx]), 2)
+                if uses_event_ledger:
+                    _cache_current_quotes(paths, close)
                 missing = [t for t in event_current_tickers if t not in live]
                 if missing:
                     return {"status": "incomplete", "failed_tickers": sorted(missing)}
@@ -1583,6 +1585,10 @@ def update_prices(paths, max_retries=3):
             pass
         if remaining and attempt < max_retries - 1:
             time.sleep(3)
+
+    if uses_event_ledger:
+        for frame in new_frames:
+            _cache_current_quotes(paths, frame)
 
     # Validate historical coverage before writing anything. A nonempty response
     # may contain only today's quote, even when a full history was requested.
@@ -2048,6 +2054,27 @@ def get_cached_accounting_snapshot(paths):
         return None
 
 
+def _cache_current_quotes(paths, prices):
+    """Keep raw quotes independently of historical/chart completeness."""
+    quote_path = os.path.join(paths["data_dir"], "current_quotes.csv")
+    rows = []
+    if os.path.exists(quote_path):
+        rows = pd.read_csv(quote_path).to_dict("records")
+    for ticker in prices.columns:
+        valid = pd.to_numeric(prices[ticker], errors="coerce")
+        valid = valid[(valid > 0) & (valid < float("inf"))].dropna().sort_index()
+        if not valid.empty:
+            rows.append({"TICKER": ticker, "DATE": valid.index[-1].strftime("%Y-%m-%d"),
+                         "PRICE": float(valid.iloc[-1])})
+    if rows:
+        os.makedirs(paths["data_dir"], exist_ok=True)
+        pd.DataFrame(rows).sort_values("DATE").drop_duplicates("TICKER", keep="last").to_csv(quote_path, index=False)
+
+
+def get_available_portfolio(paths):
+    return portfolio_replay.build_actual_portfolio(paths)
+
+
 def refresh_data(paths, force=False):
     """Stage a refresh, retaining all last-known-good data on provider failure."""
     data_dir = paths["data_dir"]
@@ -2080,6 +2107,11 @@ def refresh_data(paths, force=False):
                         if os.path.exists(target):
                             os.unlink(target)
         else:
+            # Current raw quotes are useful even if historical replay fails.
+            # They never replace history or certify historical freshness.
+            quote_source = os.path.join(staging, "current_quotes.csv")
+            if os.path.exists(quote_source):
+                shutil.copyfile(quote_source, os.path.join(data_dir, "current_quotes.csv"))
             result = dict(result)
             result["using_cached_data"] = os.path.exists(paths["price_history"])
             result["last_updated"] = get_last_updated(paths)

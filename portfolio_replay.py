@@ -274,8 +274,11 @@ def _sum_money(values):
     return _money(sum(values, Decimal("0")))
 
 
-def replay(transactions, market, manual_dividends=None, manual_tickers=None, valuation_date=None):
+def replay(transactions, market, manual_dividends=None, manual_tickers=None, valuation_date=None, actual_only=False):
     """Build one reconciled snapshot from normalized source and market data."""
+    benchmarks = () if actual_only else BENCHMARKS
+    missing_tickers = set()
+    quote_dates = {}
     events = normalize_transactions(transactions)
     if not events:
         return _empty_snapshot(valuation_date or market.latest_date)
@@ -329,7 +332,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
 
     benchmark_state = {
         benchmark: {"cash": Decimal("0"), "lots": [], "events": []}
-        for benchmark in BENCHMARKS
+        for benchmark in benchmarks
     }
 
     for event_date in event_dates:
@@ -353,7 +356,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
                         "DIVIDEND", amount, before, actual_cash, lot["lot_id"],
                     )
 
-            if ticker in BENCHMARKS:
+            if ticker in benchmarks:
                 state = benchmark_state[ticker]
                 eligible_shares = sum(
                     market.adjusted_shares(ticker, lot["shares"], lot["date"], event_date)
@@ -426,7 +429,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
                 })
                 # Validate both decision terminal prices now. Continuous
                 # portfolio benchmarks intentionally receive no event.
-                for benchmark in BENCHMARKS:
+                for benchmark in benchmarks:
                     market.price(benchmark, event_date)
                 continue
 
@@ -470,7 +473,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
                 "distributions": [],
             }
 
-            for benchmark in BENCHMARKS:
+            for benchmark in benchmarks:
                 state = benchmark_state[benchmark]
                 if contribution:
                     before = state["cash"]
@@ -512,7 +515,14 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
             current_shares = market.adjusted_shares(
                 lot["ticker"], lot["shares"], lot["buy_date"], valuation_date
             )
-            price, price_date = market.price(lot["ticker"], valuation_date, allow_stale=True)
+            try:
+                price, price_date = market.price(lot["ticker"], valuation_date, allow_stale=True)
+                quote_dates[lot["ticker"]] = price_date.isoformat()
+            except ReplayError:
+                if not actual_only:
+                    raise
+                missing_tickers.add(lot["ticker"])
+                price, price_date = Decimal("0"), None
             security_value = _money(current_shares * price)
             actual_open_value += security_value
             holding = holdings[lot["ticker"]]
@@ -542,14 +552,39 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
             "security_value": _number(security_value),
             "total_return_value": _number(total_return_value),
             "gain_loss": _number(total_return_value - lot["original_investment"]),
-            "price_date": price_date.isoformat(),
+            "price_date": price_date.isoformat() if price_date else None,
         })
 
     actual_value = _money(actual_open_value + actual_cash)
     actual_xirr = _xirr(contribution_flows + [(valuation_date, actual_value)])
 
+    if actual_only:
+        # Ledger accounting does not depend on hypothetical benchmark trades.
+        # Internal zero placeholders never escape as valuations of unpriced lots.
+        for lot in actual_lot_records:
+            if lot["status"] == "OPEN" and lot["ticker"] in missing_tickers:
+                for field in ("security_value", "total_return_value", "gain_loss"):
+                    lot[field] = None
+        return {
+            "valuation_date": valuation_date.isoformat(),
+            "cash": _number(actual_cash),
+            "total_value": None if missing_tickers else _number(actual_value),
+            "priced_subtotal": _number(actual_value),
+            "cumulative_contributions": _number(cumulative_contributions),
+            "missing_tickers": sorted(missing_tickers),
+            "holdings": [{
+                "ticker": ticker,
+                "shares": _number(values["shares"]),
+                "cost_basis": _number(values["cost_basis"]),
+                "current_value": None if ticker in missing_tickers else _number(values["current_value"]),
+                "price_date": quote_dates.get(ticker),
+            } for ticker, values in sorted(holdings.items())],
+            "lots": actual_lot_records,
+            "cash_events": actual_cash_events,
+        }
+
     portfolio_benchmarks = {}
-    for benchmark in BENCHMARKS:
+    for benchmark in benchmarks:
         state = benchmark_state[benchmark]
         price, price_date = market.price(benchmark, valuation_date, allow_stale=True)
         current_shares = sum(
@@ -568,7 +603,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
             "gain_loss": _number(total_value - cumulative_contributions),
             "xirr": _xirr(contribution_flows + [(valuation_date, total_value)]),
             "price": _number(price),
-            "price_date": price_date.isoformat(),
+            "price_date": price_date.isoformat() if price_date else None,
             "lots": [
                 {
                     **{key: value for key, value in lot.items() if key not in {"date", "price_date", "price", "shares", "amount"}},
@@ -972,3 +1007,19 @@ def build_history(paths):
             if abs(history[-1][field] - value) > 0.005:
                 raise ReplayError(f"Historical {field} does not reconcile to current snapshot")
     return history
+
+
+def build_actual_portfolio(paths):
+    """Render available real holdings without requiring benchmark history."""
+    inputs = _load_inputs(paths)
+    if inputs is None:
+        return None
+    transactions, market, manual_dividends, manual_tickers = inputs
+    quote_path = os.path.join(paths["data_dir"], "current_quotes.csv")
+    if os.path.exists(quote_path):
+        quotes = pd.read_csv(quote_path)
+        for row in quotes.itertuples(index=False):
+            market.prices.loc[pd.Timestamp(row.DATE), row.TICKER] = row.PRICE
+        market.prices = market.prices.sort_index()
+    return replay(transactions, market, manual_dividends=manual_dividends,
+                  manual_tickers=manual_tickers, actual_only=True)
