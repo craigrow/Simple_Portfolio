@@ -197,14 +197,19 @@ def index():
                 voo_invested=voo["cumulative_contributions"],
                 qqq_invested=qqq["cumulative_contributions"],
             )
-        # Never fall through to the legacy shadow calculation for an event
-        # ledger. Without a last-known-good snapshot, show an explicit empty
-        # state and the replay error until the data is corrected/refreshed.
+        try:
+            available = portfolio_engine.get_available_portfolio(paths)
+        except Exception as exc:
+            available = None
+            accounting_error += f"; Holdings unavailable: {exc}"
+        # Keep ledger holdings visible even when historical benchmark replay
+        # cannot produce a complete snapshot. Never turn missing prices into zero.
         return render_template(
             "index.html",
             portfolios=portfolios, portfolio_id=portfolio_id,
             portfolio_name=portfolio_name, accounting=None,
             accounting_error=accounting_error, decisions=[],
+            partial_portfolio=available, portfolio_unavailable=True,
             portfolio_summary=[], history=[], market_today=None,
             gainers=[], losers=[], pct_gainers=[], pct_losers=[],
             last_updated=portfolio_engine.get_last_updated(paths),

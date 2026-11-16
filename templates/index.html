@@ -99,7 +99,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
             </select>
         </form>
         {% endif %}
-        <span id="freshness">{% if last_updated %}{{ last_updated }}{% else %}Not refreshed yet{% endif %}</span>
+        <span id="freshness">{% if portfolio_unavailable %}Cached quotes · dates shown per holding{% elif last_updated %}{{ last_updated }}{% else %}Not refreshed yet{% endif %}</span>
         <a class="nav-link" href="/stats?portfolio={{ portfolio_id }}">Stats</a>
         <span id="refresh-status"></span>
     </div>
@@ -108,6 +108,9 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 <div class="container">
     {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
+    {% if portfolio_unavailable %}
+    {% include "_available_portfolio.html" %}
+    {% else %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
     {% set main_pct = (main_gain / portfolio_invested * 100) if portfolio_invested > 0 else 0 %}
@@ -317,6 +320,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         </table>
         {% endif %}
     </div>
+    {% endif %}
 </div>
 
 <script>
