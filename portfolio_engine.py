@@ -2201,17 +2201,18 @@ def _refresh_data_staged(paths):
 
 def get_price_updates(paths):
     """Latest valid quote per symbol; daily caches do not record update times."""
-    prices = read_csv(paths["price_history"])
+    prices = (pd.read_csv(paths["price_history"], index_col=0)
+              if os.path.exists(paths["price_history"]) else pd.DataFrame())
     tickers = set(_get_all_tickers(paths))
     if not prices.empty:
-        tickers.update(c for c in prices.columns if c != "DATE")
+        tickers.update(prices.columns)
     rows = []
     for ticker in sorted(tickers):
         latest = None
-        if ticker in prices and "DATE" in prices:
+        if ticker in prices:
             values = pd.to_numeric(prices[ticker], errors="coerce")
             valid = values.notna() & (values > 0) & (values < float("inf"))
-            dates = pd.to_datetime(prices.loc[valid, "DATE"], errors="coerce").dropna()
+            dates = pd.to_datetime(prices.index[valid], errors="coerce").dropna()
             if not dates.empty:
                 latest = dates.max().strftime("%Y-%m-%d")
         rows.append({"ticker": ticker, "date": latest})
