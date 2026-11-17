@@ -3,6 +3,7 @@ import csv
 import json
 import hashlib
 import tempfile
+import shutil
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import yfinance as yf
@@ -502,8 +503,8 @@ def sync(paths):
         # The versioned event ledger is replayed as a whole. Legacy positional
         # portfolio/shadow outputs must not be updated from BUY/SELL rows.
         portfolio_replay.normalize_transactions(txn)
-        if _cached_accounting_fingerprint(paths) != _accounting_input_fingerprint(paths):
-            _invalidate_daily_values(paths)
+        # Replay always rebuilds from inputs; retain the last chart until a
+        # replacement succeeds so unavailable market data cannot erase it.
         return 0
     portfolio = read_csv(paths["portfolio"])
     if not portfolio.empty:
@@ -747,6 +748,17 @@ def _fetch_splits(tickers):
     return rows
 
 
+def _merge_cached_actions(path, rows, columns):
+    """An incomplete provider response must not erase known corporate actions."""
+    existing = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=columns)
+    fetched = pd.DataFrame(rows, columns=columns)
+    combined = pd.concat([existing, fetched], ignore_index=True)
+    if combined.empty:
+        return []
+    return (combined.drop_duplicates(["TICKER", "DATE"], keep="last")
+            .sort_values(["TICKER", "DATE"])[columns].values.tolist())
+
+
 def sync_splits(paths):
     """Refresh split data if stale."""
     last_close = _last_market_close()
@@ -768,12 +780,17 @@ def sync_splits(paths):
         for _, r in old_df.iterrows():
             old_splits.add((r["TICKER"], r["DATE"], float(r["RATIO"])))
 
-    rows = _fetch_splits(tickers)
+    rows = _merge_cached_actions(paths["splits"], _fetch_splits(tickers), ["TICKER", "DATE", "RATIO"])
 
     new_splits = {(r[0], r[1], r[2]) for r in rows}
     newly_split_tickers = {t for t, d, r in new_splits - old_splits}
 
-    if newly_split_tickers and os.path.exists(paths["price_history"]):
+    source = pd.read_csv(paths["transactions"]) if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    raw_event_prices = "ACTION" in source.columns and _price_policy_is_current(paths)
+    # Event replay already applies splits to shares on the event date. Its
+    # recorded unadjusted closes remain valid historical observations. Dropping
+    # them here loses history permanently when a provider cannot backfill it.
+    if newly_split_tickers and not raw_event_prices and os.path.exists(paths["price_history"]):
         cached = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
         cols_to_drop = [c for c in cached.columns if c in newly_split_tickers]
         if cols_to_drop:
@@ -831,7 +848,7 @@ def sync_dividends(paths):
     if not tickers:
         return False
 
-    rows = _fetch_dividends(tickers)
+    rows = _merge_cached_actions(paths["dividends"], _fetch_dividends(tickers), ["TICKER", "DATE", "AMOUNT"])
     os.makedirs(os.path.dirname(paths["dividends"]), exist_ok=True)
     with open(paths["dividends"], "w", newline="") as f:
         writer = csv.writer(f)
@@ -1305,7 +1322,7 @@ def get_cached_daily_values(paths):
     if os.path.exists(cache_path):
         df = pd.read_csv(cache_path)
         if not df.empty:
-            return df.to_dict("records")
+            return df.astype(object).where(pd.notna(df), None).to_dict("records")
     return []
 
 
@@ -1365,7 +1382,7 @@ def _set_last_updated(paths, close_date=None, intraday=False):
     return val
 
 
-def update_prices(paths, max_retries=3):
+def update_prices(paths, max_retries=3, allow_partial_history=False):
     """Fetch prices for all tickers with retries, update cache, record timestamp.
     During market hours, fetches live prices without writing them to price_history.
     Returns dict with status, last_updated, and optional current_prices for intraday."""
@@ -1426,7 +1443,6 @@ def update_prices(paths, max_retries=3):
         # price columns, but rebuild every provider-priced column from raw Close.
         keep = [ticker for ticker in manual_tickers if ticker in cached.columns]
         cached = cached[keep].copy() if keep else pd.DataFrame()
-        _write_provisional_dates(paths, set())
 
     # Provisional rows hold intraday snapshots, not official closes. A row for
     # close_date that is still provisional means the market has since closed
@@ -1472,10 +1488,12 @@ def update_prices(paths, max_retries=3):
         cache_current = bool(current_by_ticker) and all(current_by_ticker)
         cache_current = cache_current and not event_history_incomplete
     elif fetched_cols:
-        fetched_dates = cached[fetched_cols].dropna(how="all").index
-        settled_dates = [d for d in fetched_dates
-                         if d.strftime("%Y-%m-%d") not in provisional_dates]
-        cache_current = (len(settled_dates) > 0 and max(settled_dates).date() >= close_date)
+        cache_current = all(
+            t in cached and any(
+                d.date() >= close_date and d.strftime("%Y-%m-%d") not in provisional_dates
+                for d in cached[t].dropna().index
+            ) for t in all_tickers
+        )
     else:
         cache_current = False
 
@@ -1495,12 +1513,18 @@ def update_prices(paths, max_retries=3):
                 close = data["Close"]
                 if isinstance(close, pd.Series):
                     close = close.to_frame(name=all_tickers[0])
+                close = close.apply(pd.to_numeric, errors="coerce")
+                close = close.where((close > 0) & (close < float("inf")))
                 live = {}
+                today = datetime.now(ZoneInfo("America/New_York")).date()
                 for t in all_tickers:
                     if t in close.columns:
                         idx = close[t].last_valid_index()
-                        if idx is not None:
+                        if idx is not None and idx.date() == today:
                             live[t] = round(float(close[t].loc[idx]), 2)
+                missing = [t for t in event_current_tickers if t not in live]
+                if missing:
+                    return {"status": "incomplete", "failed_tickers": sorted(missing)}
                 if live:
                     # Write today's intraday row into cache and flag it provisional
                     # so it is re-fetched after the close and never used as a
@@ -1514,9 +1538,9 @@ def update_prices(paths, max_retries=3):
                     _mark_provisional(paths, today.strftime("%Y-%m-%d"))
                     _set_last_updated(paths, intraday=True)
                     return {"status": "ok"}
-        except Exception:
-            pass
-        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
+        except Exception as exc:
+            return {"status": "incomplete", "message": f"Live prices unavailable: {exc}"}
+        return {"status": "incomplete", "message": "Live prices unavailable"}
 
     # If cache is current and market is closed, nothing to do
     if cache_current:
@@ -1557,6 +1581,8 @@ def update_prices(paths, max_retries=3):
             close = data["Close"]
             if isinstance(close, pd.Series):
                 close = close.to_frame(name=remaining[0])
+            close = close.apply(pd.to_numeric, errors="coerce")
+            close = close.where((close > 0) & (close < float("inf")))
             new_frames.append(close)
             # Check which tickers got data for the close_date
             got = [
@@ -1564,8 +1590,7 @@ def update_prices(paths, max_retries=3):
                 if t in close.columns
                 and close[t].last_valid_index() is not None
                 and (
-                    not uses_event_ledger
-                    or t not in event_current_tickers
+                    t not in event_current_tickers
                     or close[t].last_valid_index().date() >= close_date
                 )
             ]
@@ -1575,11 +1600,35 @@ def update_prices(paths, max_retries=3):
         if remaining and attempt < max_retries - 1:
             time.sleep(3)
 
+    history_gaps = []
+    # Historical gaps do not invalidate independently usable current prices or
+    # benchmark history. The staged refresh validates accounting before publishing.
+    # Validate historical coverage before writing anything. A nonempty response
+    # may contain only today's quote, even when a full history was requested.
+    if uses_event_ledger:
+        candidate = cached.copy()
+        for frame in new_frames:
+            candidate = frame.combine_first(candidate)
+        gaps = []
+        for ticker, required_date in event_price_dates.items():
+            values = (pd.to_numeric(candidate[ticker], errors="coerce")
+                      if ticker in candidate else pd.Series(dtype=float, index=pd.DatetimeIndex([])))
+            values = values[(values > 0) & (values < float("inf"))].dropna()
+            prior = values.loc[values.index <= required_date]
+            if prior.empty or (required_date.date() - prior.index.max().date()).days > 7:
+                gaps.append(f"{ticker}: no historical price on or before {required_date.date()}")
+        history_gaps = gaps
+        if gaps and not allow_partial_history:
+            return {"status": "incomplete", "failed_tickers": sorted(set(remaining) | {
+                gap.split(":", 1)[0] for gap in gaps
+            }), "message": "; ".join(gaps)}
+
     # Merge new data into cache
     if new_frames:
-        new_data = pd.concat(new_frames, axis=1)
-        new_data = new_data.loc[:, ~new_data.columns.duplicated(keep="last")]
-        new_data = new_data[~new_data.index.duplicated(keep="last")]
+        new_data = pd.DataFrame()
+        for frame in new_frames:
+            frame = frame[~frame.index.duplicated(keep="last")]
+            new_data = frame.combine_first(new_data)
         if not new_data.empty:
             if not cached.empty:
                 # Fresh provider values win where present, while cached/manual
@@ -1607,8 +1656,13 @@ def update_prices(paths, max_retries=3):
             # Rebuild the chart cache so it reflects corrected closes.
             _invalidate_daily_values(paths)
 
-    if remaining:
-        return {"status": "incomplete", "failed_tickers": remaining}
+    if uses_event_ledger and new_frames:
+        _write_price_policy(paths)
+    if remaining or history_gaps:
+        failed = sorted(set(remaining) | {gap.split(":", 1)[0] for gap in history_gaps})
+        return {"status": "incomplete", "failed_tickers": failed,
+                "message": "Some price history is missing: " + ", ".join(failed),
+                "history_gaps": history_gaps}
 
     if uses_event_ledger:
         _write_price_policy(paths)
@@ -1728,6 +1782,9 @@ def get_market_comparison(portfolio_total, voo_total, qqq_total, paths):
         voo_change = last["VOO"] - voo_base
         qqq_change = last["QQQ"] - qqq_base
 
+    if any(pd.isna(value) for value in (port_base, voo_base, qqq_base, port_change, voo_change, qqq_change)):
+        return None
+
     def _pct(change, base):
         return round(change / base * 100, 2) if base else 0.0
 
@@ -1762,8 +1819,12 @@ def get_gainers_losers(portfolio_summary_data, paths, n=5):
         return [], [], [], []
     # Latest prices available (may be an intraday snapshot — that is correct for
     # the current side of the comparison), against the last settled close.
-    today_prices = prices_df.ffill().iloc[-1]
-    prev_prices = prices_df.loc[:base_date].ffill().iloc[-1]
+    session_date = prices_df.index.max()
+    # A stale carried-forward quote is useful for valuation, but cannot prove
+    # a daily price change. Only rank symbols quoted on both comparison dates.
+    today_prices = prices_df.loc[session_date]
+    prev_prices = prices_df.loc[base_date]
+    splits = _read_splits(paths) if _price_policy_is_current(paths) else pd.DataFrame()
 
     changes = []
     for row in portfolio_summary_data:
@@ -1773,6 +1834,13 @@ def get_gainers_losers(portfolio_summary_data, paths, n=5):
             tp = today_prices[ticker]
             pp = prev_prices[ticker]
             if pd.notna(tp) and pd.notna(pp) and pp != 0:
+                if not splits.empty:
+                    split_dates = pd.to_datetime(splits["DATE"])
+                    relevant = splits[(splits["TICKER"] == ticker)
+                                      & (split_dates > base_date)
+                                      & (split_dates <= session_date)]
+                    if not relevant.empty:
+                        pp /= pd.to_numeric(relevant["RATIO"]).prod()
                 dollar = round((tp - pp) * shares, 2)
                 pct = round((tp - pp) / pp * 100, 2)
                 changes.append({"TICKER": ticker, "CHANGE": dollar, "PCT": pct})
@@ -1962,8 +2030,8 @@ def get_baseball_stats(paths, benchmark="VOO"):
             daily = pd.DataFrame(history)
             benchmark_column = benchmark
             if {"MAIN", benchmark_column}.issubset(daily.columns):
-                main_pct = pd.to_numeric(daily["MAIN"], errors="coerce").pct_change()
-                benchmark_pct = pd.to_numeric(daily[benchmark_column], errors="coerce").pct_change()
+                main_pct = pd.to_numeric(daily["MAIN"], errors="coerce").pct_change(fill_method=None)
+                benchmark_pct = pd.to_numeric(daily[benchmark_column], errors="coerce").pct_change(fill_method=None)
                 valid = main_pct.notna() & benchmark_pct.notna()
                 daily_wins = int((main_pct[valid] > benchmark_pct[valid]).sum())
                 daily_losses = int((main_pct[valid] < benchmark_pct[valid]).sum())
@@ -2019,7 +2087,72 @@ def get_cached_accounting_snapshot(paths):
         return None
 
 
-def refresh_data(paths):
+def refresh_data(paths, force=False):
+    """Stage a refresh, retaining all last-known-good data on provider failure."""
+    data_dir = paths["data_dir"]
+    os.makedirs(data_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="portfolio-refresh-") as staging:
+        shutil.copytree(data_dir, staging, dirs_exist_ok=True)
+        staged = {
+            key: (os.path.join(staging, os.path.relpath(value, data_dir))
+                  if os.path.commonpath([os.path.abspath(value), os.path.abspath(data_dir)])
+                  == os.path.abspath(data_dir) else value)
+            for key, value in paths.items()
+        }
+        try:
+            if force:
+                invalidate_all_caches(staged)
+            result = _refresh_data_staged(staged)
+        except Exception as exc:
+            result = {"status": "error", "message": str(exc)}
+        if result.get("status") == "ok" or result.get("usable"):
+            for name in os.listdir(staging):
+                source = os.path.join(staging, name)
+                if os.path.isfile(source):
+                    # Copy to the destination filesystem before atomic replace.
+                    fd, target = tempfile.mkstemp(dir=data_dir)
+                    os.close(fd)
+                    try:
+                        shutil.copyfile(source, target)
+                        os.replace(target, os.path.join(data_dir, name))
+                    finally:
+                        if os.path.exists(target):
+                            os.unlink(target)
+        else:
+            result = dict(result)
+            result["using_cached_data"] = os.path.exists(paths["price_history"])
+            result["last_updated"] = get_last_updated(paths)
+            result.setdefault("message", "Prices unavailable for: " + ", ".join(result.get("failed_tickers", [])))
+            fallback = ("Retained previous data" if result["using_cached_data"]
+                        else "No cached prices available")
+            result["message"] += f". {fallback}; refresh did not advance freshness."
+        with open(os.path.join(data_dir, "refresh_status.json"), "w") as status_file:
+            json.dump(result, status_file)
+        return result
+
+
+def get_snapshot_price_label(snapshot):
+    """Describe the dates of displayed quotes, not a failed refresh's old stamp."""
+    dates = {lot["price_date"] for lot in snapshot["actual"]["lots"]
+             if lot["status"] == "OPEN" and lot.get("price_date")}
+    dates.update(value["price_date"] for value in snapshot["portfolio_benchmarks"].values()
+                 if value.get("price_date"))
+    if not dates:
+        return "No cached quotes"
+    first, last = min(dates), max(dates)
+    return "Cached quotes: " + (first if first == last else f"{first}–{last}")
+
+
+def get_refresh_warning(paths):
+    try:
+        with open(os.path.join(paths["data_dir"], "refresh_status.json")) as status_file:
+            result = json.load(status_file)
+        return result.get("message", "") if result.get("status") != "ok" else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def _refresh_data_staged(paths):
     """Full refresh: sync new transactions, splits, dividends, update prices, and recompute chart."""
     sync(paths)
     try:
@@ -2030,7 +2163,10 @@ def refresh_data(paths):
         sync_dividends(paths)
     except Exception:
         pass
-    result = update_prices(paths)
+    result = update_prices(paths, allow_partial_history=True)
+    source = pd.read_csv(paths["transactions"]) if os.path.exists(paths["transactions"]) else pd.DataFrame()
+    if "ACTION" in source.columns and not _price_policy_is_current(paths):
+        return result
     try:
         sync_manual_prices(paths)
     except Exception:
@@ -2046,11 +2182,18 @@ def refresh_data(paths):
         pd.read_csv(paths["transactions"])
         if os.path.exists(paths["transactions"]) else pd.DataFrame()
     )
-    if result.get("status") == "ok" and "ACTION" in source.columns:
+    if result.get("status") in {"ok", "incomplete"} and "ACTION" in source.columns:
         try:
             build_accounting_snapshot(paths, persist=True)
         except Exception as e:
             result = dict(result)
             result["status"] = "error"
             result["message"] = f"Prices refreshed but accounting replay failed: {e}"
+    if result.get("status") == "incomplete" and "ACTION" in source.columns:
+        result["usable"] = True
+        count = len(result.get("failed_tickers", []))
+        result["message"] = (
+            f"Some prices could not be refreshed ({count} symbols). Using available cached prices."
+            + (" Missing historical chart values are left blank." if result.get("history_gaps") else "")
+        )
     return result

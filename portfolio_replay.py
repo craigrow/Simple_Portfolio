@@ -898,6 +898,7 @@ def build_history(paths):
             benchmark_cash_index[benchmark] = index
 
         actual_security_value = Decimal("0")
+        actual_complete = True
         for lot in actual_lots:
             if lot["buy_date"] > valuation_date:
                 continue
@@ -905,9 +906,8 @@ def build_history(paths):
                 continue
             raw_price = price_row.get(lot["ticker"])
             if pd.isna(raw_price):
-                raise ReplayError(
-                    f"No historical {lot['ticker']} price on or before {valuation_date}"
-                )
+                actual_complete = False
+                continue
             shares = market.adjusted_shares(
                 lot["ticker"], lot["shares"], lot["buy_date"], valuation_date
             )
@@ -943,22 +943,23 @@ def build_history(paths):
         actual_total = _money(actual_security_value + actual_cash)
         history.append({
             "DATE": valuation_date.isoformat(),
-            "MAIN": _number(actual_total),
+            "MAIN": _number(actual_total) if actual_complete else None,
             "VOO": _number(values["VOO"]),
             "QQQ": _number(values["QQQ"]),
             "MAIN_CASH": _number(actual_cash),
-            "MAIN_SECURITIES": _number(actual_security_value),
+            "MAIN_SECURITIES": _number(actual_security_value) if actual_complete else None,
             "VOO_CASH": _number(benchmark_cash["VOO"]),
             "VOO_SECURITIES": _number(benchmark_security_values["VOO"]),
             "QQQ_CASH": _number(benchmark_cash["QQQ"]),
             "QQQ_SECURITIES": _number(benchmark_security_values["QQQ"]),
             "DAILY_CONTRIBUTIONS": _number(_money(daily_contributions)),
             "CONTRIBUTIONS": _number(_money(contributions)),
-            "VS_VOO": _number(_money(actual_total - values["VOO"])),
-            "VS_QQQ": _number(_money(actual_total - values["QQQ"])),
+            "VS_VOO": _number(_money(actual_total - values["VOO"])) if actual_complete else None,
+            "VS_QQQ": _number(_money(actual_total - values["QQQ"])) if actual_complete else None,
             "PRICE_STATUS": (
-                "PROVISIONAL"
-                if valuation_date.isoformat() in provisional_dates else "SETTLED"
+                "INCOMPLETE" if not actual_complete else (
+                    "PROVISIONAL" if valuation_date.isoformat() in provisional_dates else "SETTLED"
+                )
             ),
         })
     if history and history[-1]["DATE"] == final_snapshot["valuation_date"]:

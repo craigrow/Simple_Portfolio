@@ -106,6 +106,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 </div>
 
 <div class="container">
+    {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
@@ -310,7 +311,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
             <thead><tr><th class="sortable text-left">Date</th><th class="sortable text-right">Portfolio</th><th class="sortable text-right">VOO</th><th class="sortable text-right">QQQ</th></tr></thead>
             <tbody>
                 {% for row in history %}
-                <tr><td class="text-left">{{ row.DATE }}</td><td class="text-right">${{ "{:,.2f}".format(row.MAIN) }}</td><td class="text-right">${{ "{:,.2f}".format(row.VOO) }}</td><td class="text-right">${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
+                <tr><td class="text-left">{{ row.DATE }}</td><td class="text-right">{% if row.MAIN is not none %}${{ "{:,.2f}".format(row.MAIN) }}{% else %}—{% endif %}</td><td class="text-right">${{ "{:,.2f}".format(row.VOO) }}</td><td class="text-right">${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -495,7 +496,15 @@ function refreshData(refreshAll) {
     fetch(refreshUrl)
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.status === "ok") {
+            var results = data.results || {};
+            var warnings = Object.keys(results).filter(function(pid) {
+                return results[pid].status !== "ok";
+            }).map(function(pid) {
+                return pid + ": " + (results[pid].message || "Prices unavailable; using previous data");
+            });
+            var updated = Object.keys(results).some(function(pid) { return results[pid].status === "ok" || results[pid].usable; });
+            if (data.status === "ok" || data.usable || updated) {
+                if (warnings.length) sessionStorage.setItem("portfolioRefreshWarning", "Updated with some cached or missing prices.");
                 status.textContent = "Updated. Reloading…";
                 setTimeout(function() {
                     var url = new URL(window.location.href);
@@ -503,13 +512,18 @@ function refreshData(refreshAll) {
                     window.location.replace(url.toString());
                 }, 500);
             }
-            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.failed_tickers||[]).join(", "); }
+            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.message || (data.failed_tickers||[]).join(", ")); }
             else { status.textContent = "Refresh failed: " + data.message; }
         })
         .catch(function(e) { status.textContent = "Refresh failed: " + e; });
 }
 
 (function() {
+    var warning = sessionStorage.getItem("portfolioRefreshWarning");
+    if (warning) {
+        document.getElementById("refresh-status").textContent = warning;
+        sessionStorage.removeItem("portfolioRefreshWarning");
+    }
     var autoRefresh = {{ auto_refresh|tojson }};
     if (!autoRefresh) return;
     var url = new URL(window.location.href);
