@@ -2197,3 +2197,22 @@ def _refresh_data_staged(paths):
             + (" Missing historical chart values are left blank." if result.get("history_gaps") else "")
         )
     return result
+
+
+def get_price_updates(paths):
+    """Latest valid quote per symbol; daily caches do not record update times."""
+    prices = read_csv(paths["price_history"])
+    tickers = set(_get_all_tickers(paths))
+    if not prices.empty:
+        tickers.update(c for c in prices.columns if c != "DATE")
+    rows = []
+    for ticker in sorted(tickers):
+        latest = None
+        if ticker in prices and "DATE" in prices:
+            values = pd.to_numeric(prices[ticker], errors="coerce")
+            valid = values.notna() & (values > 0) & (values < float("inf"))
+            dates = pd.to_datetime(prices.loc[valid, "DATE"], errors="coerce").dropna()
+            if not dates.empty:
+                latest = dates.max().strftime("%Y-%m-%d")
+        rows.append({"ticker": ticker, "date": latest})
+    return rows

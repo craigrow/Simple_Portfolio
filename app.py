@@ -16,7 +16,8 @@ def refresh_warning_context():
     pid = request.args.get("portfolio")
     if pid not in [p[0] for p in portfolios]:
         pid = portfolios[0][0] if portfolios else None
-    return {"refresh_warning": portfolio_engine.get_refresh_warning(
+    return {"price_updates": portfolio_engine.get_price_updates(portfolio_engine.get_paths(pid)) if pid else [],
+            "refresh_warning": portfolio_engine.get_refresh_warning(
         portfolio_engine.get_paths(pid)) if pid else ""}
 
 

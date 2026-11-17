@@ -215,6 +215,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         <button class="tab" onclick="showTab('history-table', this)">Daily Values</button>
         <button class="tab" onclick="showTab('shadow-voo', this)">{{ "VOO Benchmark" if accounting else "Shadow VOO" }}</button>
         <button class="tab" onclick="showTab('shadow-qqq', this)">{{ "QQQ Benchmark" if accounting else "Shadow QQQ" }}</button>
+        <button class="tab" onclick="showTab('price-updates', this)">Price Updates</button>
     </div>
 
     {% if portfolio_summary %}
@@ -303,6 +304,16 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         {% else %}
         {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, shadow_columns, false) }}
         {% endif %}
+    </div>
+
+    <div id="price-updates" class="tab-panel">
+        <p style="padding:1rem;">Latest available quote for each ticker, including benchmarks. The price cache records quote dates; exact update times are not recorded.</p>
+        <table class="auto-sort">
+            <thead><tr><th class="sortable text-left">Ticker</th><th class="sortable text-left">Latest Quote Date</th></tr></thead>
+            <tbody>{% for row in price_updates %}
+                <tr><td class="text-left">{{ row.ticker }}</td><td class="text-left">{{ row.date or "No price available" }}</td></tr>
+            {% endfor %}</tbody>
+        </table>
     </div>
 
     <div id="history-table" class="tab-panel">
