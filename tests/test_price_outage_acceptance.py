@@ -46,7 +46,7 @@ def test_missing_one_tickers_history_keeps_dashboard_and_benchmarks(tmp_path, mo
     assert snapshot["actual"]["total_value"] == 920
     assert snapshot["portfolio_benchmarks"]["VOO"]["total_value"] > 900
     history = engine.get_cached_daily_values(paths)
-    assert history[0]["MAIN"] == (None if missing_history else 600)  # No invented market close.
+    assert history[0]["MAIN"] == 600  # Transaction observation supplies valuation, not a market close.
     assert history[0]["VOO"] == 600
     assert history[-1]["MAIN"] == 920
     assert result["status"] == ("incomplete" if missing_history else "ok")
@@ -66,7 +66,7 @@ def test_missing_one_tickers_history_keeps_dashboard_and_benchmarks(tmp_path, mo
         cached_page = client.get("/?portfolio=outage&auto_refreshed=1").get_data(as_text=True)
     assert outage["status"] == "incomplete"
     assert "$920" in cached_page and 'id="historyChart"' in cached_page
-    assert "Cached quotes: 2026-11-16" in cached_page
+    assert "Price dates: 2026-11-16" in cached_page
     assert len(outage["message"]) < 200
     assert engine.get_cached_accounting_snapshot(paths) == prior_snapshot
     assert engine.get_cached_daily_values(paths) == prior_history

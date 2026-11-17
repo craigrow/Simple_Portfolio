@@ -428,7 +428,7 @@ class TestAccountingReplayView:
 
     @patch.object(portfolio_engine, "should_auto_refresh", return_value=False)
     @patch.object(portfolio_engine, "needs_refresh", return_value=True)
-    def test_event_ledger_without_valid_snapshot_shows_replay_error(
+    def test_event_ledger_without_market_prices_uses_transaction_prices(
         self, mock_needs_refresh, mock_auto_refresh, client
     ):
         with open(_paths()["transactions"], "w", newline="") as f:
@@ -441,8 +441,9 @@ class TestAccountingReplayView:
         response = client.get("/?portfolio=test_portfolio")
 
         assert response.status_code == 200
-        assert b"Accounting replay warning" in response.data
-        assert b"No cached price history" in response.data
+        assert b"Accounting replay warning" not in response.data
+        assert b"$1,000" in response.data
+        assert b"Missing benchmark price history" in response.data
 
 
 class TestDateSorting:

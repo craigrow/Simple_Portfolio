@@ -57,6 +57,7 @@ select { background: var(--surface2); color: var(--text); border: 1px solid var(
 </div>
 
 <div class="container">
+    {% if stats and stats.pricing_note %}<p style="color:var(--muted);margin-bottom:1rem;">{{ stats.pricing_note }}</p>{% endif %}
     {% if not portfolios %}
     <div class="empty">No portfolios found.</div>
     {% else %}

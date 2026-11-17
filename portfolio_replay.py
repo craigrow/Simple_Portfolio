@@ -16,6 +16,8 @@ import os
 import tempfile
 
 import pandas as pd
+from pricing import PriceBook, Observation
+import pricing_sources
 
 
 getcontext().prec = 34
@@ -54,6 +56,8 @@ def _date(value, field="date"):
 
 
 def _number(value):
+    if value is None:
+        return None
     """JSON-safe numeric output without changing posted cent values."""
     return float(value)
 
@@ -130,7 +134,7 @@ def normalize_transactions(transactions):
 class MarketBook:
     """Read-only normalized access to cached prices, splits, and dividends."""
 
-    def __init__(self, prices, splits=None, dividends=None):
+    def __init__(self, prices, splits=None, dividends=None, price_book=None):
         self.prices = prices.copy() if prices is not None else pd.DataFrame()
         if not self.prices.empty:
             normalized = pd.to_datetime(self.prices.index).tz_localize(None).normalize()
@@ -172,30 +176,30 @@ class MarketBook:
                     self.dividends.append((dividend_date, ticker, amount))
             self.dividends.sort()
 
+        if price_book is None:
+            observations = []
+            for ticker in self.prices:
+                for i, (day, value) in enumerate(self.prices[ticker].dropna().items()):
+                    observations.append(Observation(ticker, day.date(), _decimal(value, "price"),
+                                                    "api", "close", f"{ticker}:{day}", i))
+            price_book = PriceBook(observations, splits=self.splits)
+        self.book = price_book
+        # Observation dates define chart samples; valuation never forward-fills raw prices here.
+        dates = sorted({o.effective_date for rows in self.book.eligible.values() for o in rows})
+        self.prices = pd.DataFrame(index=pd.to_datetime(dates))
+
     @property
     def latest_date(self):
-        if self.prices.empty:
-            return None
-        return self.prices.index.max().date()
+        return self.book.latest_date
 
-    def price(self, ticker, event_date, max_age_days=7, allow_stale=False):
-        if ticker not in self.prices.columns:
-            raise ReplayError(f"No cached price history for {ticker}")
-        target = pd.Timestamp(event_date)
-        series = pd.to_numeric(self.prices[ticker], errors="coerce").dropna()
-        prior = series.loc[series.index <= target]
-        if prior.empty:
-            raise ReplayError(f"No settled {ticker} price on or before {event_date}")
-        market_ts = prior.index[-1]
-        age = (target.date() - market_ts.date()).days
-        if not allow_stale and age > max_age_days:
-            raise ReplayError(
-                f"No settled {ticker} price within {max_age_days} days before {event_date}"
-            )
-        price = _decimal(prior.iloc[-1], f"{ticker} price")
-        if price <= 0:
-            raise ReplayError(f"Invalid cached price for {ticker} on {market_ts.date()}")
-        return price, market_ts.date()
+    def resolve(self, ticker, event_date):
+        return self.book.resolve(ticker, event_date)
+
+    def price(self, ticker, event_date, max_age_days=None, allow_stale=True):
+        result = self.resolve(ticker, event_date)
+        if result.value is None:
+            raise ReplayError(f"No price for {ticker} on or before {event_date}")
+        return result.value, result.effective_date
 
     def split_factor(self, ticker, buy_date, target_date):
         factor = Decimal("1")
@@ -328,7 +332,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
     cumulative_contributions = Decimal("0")
 
     benchmark_state = {
-        benchmark: {"cash": Decimal("0"), "lots": [], "events": []}
+        benchmark: {"cash": Decimal("0"), "lots": [], "events": [], "unavailable_since": None, "estimated": False}
         for benchmark in BENCHMARKS
     }
 
@@ -426,8 +430,6 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
                 })
                 # Validate both decision terminal prices now. Continuous
                 # portfolio benchmarks intentionally receive no event.
-                for benchmark in BENCHMARKS:
-                    market.price(benchmark, event_date)
                 continue
 
             # BUY
@@ -482,7 +484,12 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
                     )
                 invest_amount = state["cash"]
                 if invest_amount:
-                    price, price_date = market.price(benchmark, event_date)
+                    quote = market.resolve(benchmark, event_date)
+                    if quote.value is None or state["unavailable_since"]:
+                        state["unavailable_since"] = state["unavailable_since"] or event_date.isoformat()
+                        continue
+                    state["estimated"] |= quote.carried_forward or quote.kind != "close"
+                    price, price_date = quote.value, quote.effective_date
                     shares = invest_amount / price
                     before = state["cash"]
                     state["cash"] = Decimal("0")
@@ -551,7 +558,22 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
     portfolio_benchmarks = {}
     for benchmark in BENCHMARKS:
         state = benchmark_state[benchmark]
-        price, price_date = market.price(benchmark, valuation_date, allow_stale=True)
+        quote = market.resolve(benchmark, valuation_date)
+        if quote.value is None or state["unavailable_since"]:
+            portfolio_benchmarks[benchmark] = {
+                "ticker": benchmark, "shares": None, "cash": None,
+                "security_value": None, "total_value": None, "gain_loss": None,
+                "cumulative_contributions": _number(cumulative_contributions),
+                "xirr": None, "price": None, "price_date": None,
+                "lots": [{**lot, "date": lot["date"].isoformat(),
+                          "price_date": lot["price_date"].isoformat(),
+                          "price": _number(lot["price"]), "shares": _number(lot["shares"]),
+                          "amount": _number(lot["amount"])} for lot in state["lots"]],
+                "events": state["events"], "unavailable_since": state["unavailable_since"],
+                "reason": "Missing price needed for benchmark contributions or valuation", "estimated": False,
+            }
+            continue
+        price, price_date = quote.value, quote.effective_date
         current_shares = sum(
             market.adjusted_shares(benchmark, lot["shares"], lot["date"], valuation_date)
             for lot in state["lots"]
@@ -560,6 +582,7 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
         total_value = _money(security_value + state["cash"])
         portfolio_benchmarks[benchmark] = {
             "ticker": benchmark,
+            "estimated": state["estimated"] or quote.carried_forward or quote.kind != "close",
             "shares": _number(current_shares),
             "cash": _number(state["cash"]),
             "security_value": _number(security_value),
@@ -588,8 +611,8 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
     for decision in decisions:
         by_lot[decision["lot_id"]].update({
             "decision_xirr": decision["actual"]["xirr"],
-            "vs_voo": decision["actual"]["total_return_value"] - decision["VOO"]["total_return_value"],
-            "vs_qqq": decision["actual"]["total_return_value"] - decision["QQQ"]["total_return_value"],
+            "vs_voo": _difference(decision["actual"]["total_return_value"], decision["VOO"]["total_return_value"]),
+            "vs_qqq": _difference(decision["actual"]["total_return_value"], decision["QQQ"]["total_return_value"]),
         })
 
     holding_records = []
@@ -606,6 +629,9 @@ def replay(transactions, market, manual_dividends=None, manual_tickers=None, val
     snapshot = {
         "version": SNAPSHOT_VERSION,
         "valuation_date": valuation_date.isoformat(),
+        "price_generation": market.book.generation,
+        "price_updates": [{"ticker": t, **market.resolve(t, valuation_date).to_dict()}
+                          for t in sorted(set(market.book.observations) | set(BENCHMARKS))],
         "actual": {
             "cash": _number(actual_cash),
             "security_value": _number(_money(actual_open_value)),
@@ -662,7 +688,14 @@ def _build_decisions(actual_lots, market, valuation_date):
             "actual": actual_record,
         }
         for benchmark in BENCHMARKS:
-            start_price, start_price_date = market.price(benchmark, lot["buy_date"])
+            start = market.resolve(benchmark, lot["buy_date"])
+            terminal = market.resolve(benchmark, terminal_date)
+            if start.value is None or terminal.value is None:
+                decision[benchmark] = {key: None for key in (
+                    "start_price", "start_price_date", "starting_shares", "terminal_price",
+                    "terminal_price_date", "security_value", "distributions", "total_return_value", "gain_loss", "xirr")}
+                continue
+            start_price, start_price_date = start.value, start.effective_date
             starting_shares = lot["original_investment"] / start_price
             terminal_price, terminal_price_date = market.price(benchmark, terminal_date, allow_stale=terminal_date == valuation_date)
             terminal_shares = market.adjusted_shares(
@@ -694,8 +727,8 @@ def _build_decisions(actual_lots, market, valuation_date):
                 "gain_loss": _number(total_return_value - lot["original_investment"]),
                 "xirr": _xirr(flows),
             }
-        decision["vs_voo"] = decision["actual"]["total_return_value"] - decision["VOO"]["total_return_value"]
-        decision["vs_qqq"] = decision["actual"]["total_return_value"] - decision["QQQ"]["total_return_value"]
+        decision["vs_voo"] = _difference(decision["actual"]["total_return_value"], decision["VOO"]["total_return_value"])
+        decision["vs_qqq"] = _difference(decision["actual"]["total_return_value"], decision["QQQ"]["total_return_value"])
         decisions.append(decision)
     return decisions
 
@@ -706,6 +739,8 @@ def _validate_snapshot(snapshot):
         state = snapshot["portfolio_benchmarks"][benchmark]
         if abs(state["cumulative_contributions"] - actual["cumulative_contributions"]) > 0.005:
             raise ReplayError(f"{benchmark} contributions do not match actual contributions")
+        if state["total_value"] is None or actual["total_value"] is None:
+            continue
         expected_lead = actual["gain_loss"] - state["gain_loss"]
         value_lead = actual["total_value"] - state["total_value"]
         if abs(expected_lead - value_lead) > 0.011:
@@ -751,8 +786,9 @@ def _load_inputs(paths):
     if os.path.exists(paths.get("config", "")):
         with open(paths["config"]) as config_file:
             config = json.load(config_file)
-    manual_tickers = set(transactions["TICKER"].astype(str)) if config.get("manual_pricing") else set()
-    return transactions, MarketBook(prices, splits, dividends), manual_dividends, manual_tickers
+    book = pricing_sources.load_book(paths)
+    manual_tickers = {t for t, mode in book.modes.items() if mode == "static"}
+    return transactions, MarketBook(prices, splits, dividends, book), manual_dividends, manual_tickers
 
 
 def build_snapshot(paths, valuation_date=None, persist=False):
@@ -799,7 +835,7 @@ def build_history(paths):
         return []
     transactions, market, manual_dividends, manual_tickers = inputs
     events = normalize_transactions(transactions)
-    if not events or market.prices.empty:
+    if not events or market.latest_date is None:
         return []
     final_snapshot = replay(
         transactions,
@@ -808,7 +844,7 @@ def build_history(paths):
         manual_tickers=manual_tickers,
     )
     first_date = events[0]["date"]
-    prices = market.prices.ffill()
+    prices = market.prices
 
     def dated_cash(events_to_apply):
         return sorted(
@@ -904,8 +940,8 @@ def build_history(paths):
                 continue
             if lot["sell_date"] is not None and lot["sell_date"] <= valuation_date:
                 continue
-            raw_price = price_row.get(lot["ticker"])
-            if pd.isna(raw_price):
+            raw_price = market.resolve(lot["ticker"], valuation_date).value
+            if raw_price is None:
                 actual_complete = False
                 continue
             shares = market.adjusted_shares(
@@ -918,11 +954,14 @@ def build_history(paths):
         values = {}
         benchmark_security_values = {}
         for benchmark in BENCHMARKS:
-            raw_price = price_row.get(benchmark)
-            if pd.isna(raw_price):
-                raise ReplayError(
-                    f"No historical {benchmark} price on or before {valuation_date}"
-                )
+            raw_price = market.resolve(benchmark, valuation_date).value
+            if raw_price is None or (
+                final_snapshot["portfolio_benchmarks"][benchmark].get("unavailable_since")
+                and final_snapshot["portfolio_benchmarks"][benchmark]["unavailable_since"] <= valuation_date.isoformat()
+            ):
+                benchmark_security_values[benchmark] = None
+                values[benchmark] = None
+                continue
             shares = sum(
                 (
                     market.adjusted_shares(
@@ -954,8 +993,8 @@ def build_history(paths):
             "QQQ_SECURITIES": _number(benchmark_security_values["QQQ"]),
             "DAILY_CONTRIBUTIONS": _number(_money(daily_contributions)),
             "CONTRIBUTIONS": _number(_money(contributions)),
-            "VS_VOO": _number(_money(actual_total - values["VOO"])) if actual_complete else None,
-            "VS_QQQ": _number(_money(actual_total - values["QQQ"])) if actual_complete else None,
+            "VS_VOO": _number(_money(actual_total - values["VOO"])) if actual_complete and values["VOO"] is not None else None,
+            "VS_QQQ": _number(_money(actual_total - values["QQQ"])) if actual_complete and values["QQQ"] is not None else None,
             "PRICE_STATUS": (
                 "INCOMPLETE" if not actual_complete else (
                     "PROVISIONAL" if valuation_date.isoformat() in provisional_dates else "SETTLED"
@@ -970,6 +1009,14 @@ def build_history(paths):
             "CONTRIBUTIONS": final_snapshot["actual"]["cumulative_contributions"],
         }
         for field, value in expected.items():
+            if value is None or history[-1][field] is None:
+                if value != history[-1][field]:
+                    raise ReplayError(f"Historical {field} availability does not reconcile")
+                continue
             if abs(history[-1][field] - value) > 0.005:
                 raise ReplayError(f"Historical {field} does not reconcile to current snapshot")
     return history
+
+
+def _difference(left, right):
+    return left - right if left is not None and right is not None else None

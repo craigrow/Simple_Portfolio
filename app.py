@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 import os
 import pandas as pd
 import portfolio_engine
@@ -8,6 +8,27 @@ app = Flask(__name__)
 # Seed the directory the app actually uses, including local/no-disk hosts.
 import init_data
 init_data.seed_empty_derived_files(init_data.SEED_SRC, portfolio_engine.PORTFOLIOS_DIR)
+
+
+@app.before_request
+def lock_price_generation():
+    if request.endpoint not in {"index", "stats"}:
+        return
+    portfolios = portfolio_engine.list_portfolios()
+    if not portfolios:
+        return
+    pid = request.args.get("portfolio")
+    if pid not in dict(portfolios):
+        pid = portfolios[0][0]
+    g.price_lock = portfolio_engine.pricing_sources.data_lock(portfolio_engine.get_paths(pid))
+    g.price_lock.__enter__()
+
+
+@app.teardown_request
+def unlock_price_generation(error=None):
+    lock = g.pop("price_lock", None)
+    if lock:
+        lock.__exit__(None, None, None)
 
 
 @app.context_processor
@@ -116,7 +137,9 @@ def index():
     # derived data, keep the dashboard available with the last readable cache.
     try:
         portfolio_engine.sync(paths)
-        portfolio_engine.sync_manual_prices(paths)
+        source_kind = pd.read_csv(paths["transactions"], nrows=0)
+        if "ACTION" not in source_kind.columns:
+            portfolio_engine.sync_manual_prices(paths)
     except Exception:
         pass
     port_df, shadow_voo_df, shadow_qqq_df = portfolio_engine.load_all(paths)
@@ -144,11 +167,13 @@ def index():
         except Exception as exc:
             accounting = portfolio_engine.get_cached_accounting_snapshot(paths)
             accounting_error = str(exc)
+            if accounting:
+                accounting_error = "Showing previous ledger snapshot as of " + str(accounting.get("valuation_date")) + ": " + accounting_error
         if accounting is not None:
             history = portfolio_engine.get_cached_daily_values(paths)
             chart_stale = (portfolio_engine._cached_accounting_fingerprint(paths)
                            != portfolio_engine._accounting_input_fingerprint(paths))
-            if (not history or chart_stale) and os.path.exists(prices_path) and not portfolio_engine.get_refresh_warning(paths):
+            if not history or chart_stale:
                 try:
                     history = portfolio_engine.compute_daily_values(paths)
                 except Exception as exc:
@@ -178,6 +203,7 @@ def index():
                 portfolio_id=portfolio_id,
                 portfolio_name=portfolio_name,
                 accounting=accounting,
+                price_updates=accounting.get("price_updates", []),
                 accounting_error=accounting_error,
                 decisions=_decision_rows(accounting),
                 portfolio_summary=portfolio_summary,
@@ -187,9 +213,7 @@ def index():
                 losers=losers,
                 pct_gainers=pct_gainers,
                 pct_losers=pct_losers,
-                last_updated=(portfolio_engine.get_snapshot_price_label(accounting)
-                              if accounting_error or portfolio_engine.get_refresh_warning(paths)
-                              else portfolio_engine.get_last_updated(paths)),
+                last_updated=portfolio_engine.get_snapshot_price_label(accounting),
                 needs_refresh=portfolio_engine.needs_refresh(paths),
                 auto_refresh=portfolio_engine.should_auto_refresh(paths),
                 portfolio=[], shadow_voo=[], shadow_qqq=[], columns=[], shadow_columns=[],

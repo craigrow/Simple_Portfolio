@@ -125,6 +125,7 @@ def run(work):
                         'seconds': round(time.monotonic() - started, 2)}
                 if scenario == 'warm' and not issues:
                     before = json.dumps(snapshot, sort_keys=True)
+                    (work / 'cases' / f'{scenario}-{pid}-before-outage.json').write_text(before)
                     previous_history = history
                     timestamp_path = Path(paths['last_updated'])
                     previous_stamp = timestamp_path.read_bytes() if timestamp_path.exists() else None
