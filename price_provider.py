@@ -2,7 +2,8 @@
 import os
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
@@ -428,6 +429,9 @@ def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history
 def _record_quote_kinds(paths, prices, market_open, initialize=False):
     path = paths.get("price_kinds") or os.path.join(paths["data_dir"], "price_kinds.json")
     kinds = json.loads(open(path).read()) if os.path.exists(path) else {}
+    receipts_path = paths.get("price_receipts") or os.path.join(paths["data_dir"], "price_receipts.json")
+    receipts = json.loads(open(receipts_path).read()) if os.path.exists(receipts_path) else {}
+    received_at = datetime.now(timezone.utc).isoformat()
     provisional = _read_provisional_dates(paths)
     today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     static_tickers = _manual_tickers(paths)
@@ -444,6 +448,10 @@ def _record_quote_kinds(paths, prices, market_open, initialize=False):
                 kinds.setdefault(key, kind)
             else:
                 kinds[key] = "intraday" if market_open and day == today else "close"
+                receipts[key] = {"value": str(Decimal(str(value)).normalize()), "received_at": received_at}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as stream:
         json.dump(kinds, stream, sort_keys=True)
+    if not initialize:
+        with open(receipts_path, "w") as stream:
+            json.dump(receipts, stream, sort_keys=True)

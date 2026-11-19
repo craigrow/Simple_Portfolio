@@ -17,6 +17,7 @@ class Observation:
     kind: str
     reference: str
     order: int = 0
+    received_at: str | None = None
     recorded_at: str | None = None
 
     def __post_init__(self):
@@ -36,6 +37,7 @@ class PriceResult:
     carried_forward: bool
     status: str
     reason: str | None = None
+    received_at: str | None = None
     recorded_at: str | None = None
     split_factor: str = "1"
     original_value: str | None = None
@@ -94,5 +96,5 @@ class PriceBook:
         carried = obs.effective_date < at
         status = 'static' if self.modes.get(ticker) == 'static' else ('carried' if carried else 'available')
         return PriceResult(value, obs.effective_date, obs.source, obs.kind, obs.reference,
-                           carried, status, recorded_at=obs.recorded_at,
+                           carried, status, received_at=obs.received_at, recorded_at=obs.recorded_at,
                            split_factor=str(factor), original_value=str(obs.value))

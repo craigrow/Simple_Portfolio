@@ -107,6 +107,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 
 <div class="container">
     {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
+    {% if split_history %}<div class="warning">{{ split_history.message }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
@@ -315,15 +316,24 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
     </div>
 
     <div id="price-updates" class="tab-panel">
-        <p style="padding:1rem;">Prices used for this valuation, including benchmarks. Static and carried prices remain valid until a newer observation is available. Prices are normalized for splits; dates identify the original observation. Exact quote times are not available in daily source data.</p>
+        <p style="padding:1rem;">Last Price Update is when the app successfully received the API price, or first stored a manual or transaction valuation. Times are shown in UTC. Quote Date is when that price applies; refreshing an old quote does not change its date. Historical receipt times that were never recorded are shown as unavailable.</p>
         <table class="auto-sort">
-            <thead><tr><th class="sortable text-left">Ticker</th><th class="sortable text-right">Price</th><th class="sortable text-left">Price Date</th><th class="sortable text-left">Source</th><th class="sortable text-left">Status</th><th class="sortable text-left">First Stored (UTC)</th></tr></thead>
+            <thead><tr><th class="sortable text-left">Ticker</th><th class="sortable text-right">Price</th><th class="sortable text-left">Quote Date</th><th class="sortable text-left">Source</th><th class="sortable text-left">Status</th><th class="sortable text-left">Last Price Update (UTC)</th></tr></thead>
             <tbody>{% for row in price_updates %}
-                <tr><td class="text-left">{{ row.ticker }}</td><td class="text-right">{% if row.value is not none %}${{ "{:,.5f}".format(row.value) }}{% else %}—{% endif %}</td><td class="text-left">{{ row.effective_date or "No price available" }}</td><td class="text-left">{{ row.source or "—" }}</td><td class="text-left">{{ row.status }}</td><td class="text-left">{{ row.recorded_at[:19]|replace("T", " ") if row.recorded_at else "Not recorded" }}</td></tr>
+                <tr><td class="text-left">{{ row.ticker }}</td><td class="text-right">{% if row.value is not none %}${{ "{:,.5f}".format(row.value) }}{% else %}—{% endif %}</td><td class="text-left">{{ row.effective_date or "No price available" }}</td><td class="text-left">{{ row.source or "—" }}</td><td class="text-left">{{ row.status }}</td><td class="text-left">{% set updated_at = row.received_at if row.source == "api" else row.recorded_at %}{{ updated_at[:19]|replace("T", " ") if updated_at else "Not recorded" }}</td></tr>
             {% endfor %}</tbody>
         </table>
     </div>
 
+    {% if split_history %}
+    <details style="margin:1rem 0;" id="split-coverage">
+        <summary>Split-history coverage and review status</summary>
+        <p>Provider coverage is not independent verification. A successful quote refresh does not certify split completeness.</p>
+        <table><thead><tr><th>Ticker</th><th>Status</th><th>Required from</th><th>Provider checked through</th><th>Last successful check (UTC)</th><th>Review findings</th></tr></thead><tbody>
+        {% for row in split_history.rows %}<tr><td>{{ row.ticker }}</td><td>{{ row.status|replace('_', ' ') }}</td><td>{{ row.required_from }}</td><td>{{ row.covered_through or 'Not established' }}</td><td>{{ row.last_success_at[:19]|replace('T', ' ') if row.last_success_at else 'Not recorded' }}</td><td>{{ row.issues|join('; ') if row.issues else '' }}</td></tr>{% endfor %}
+        </tbody></table>
+    </details>
+    {% endif %}
     <div id="history-table" class="tab-panel">
         {% if history %}
         <table class="auto-sort">

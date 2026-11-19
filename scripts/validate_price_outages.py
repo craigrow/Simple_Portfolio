@@ -83,7 +83,7 @@ def run(work):
                     (root / 'data/price_history.policy').unlink(missing_ok=True)
         with patch.object(engine, '_is_market_open', return_value=False), \
              patch.object(engine, '_last_market_close', return_value=date(2026, 11, 16)), \
-             patch.object(engine, '_fetch_splits', side_effect=lambda tickers: corporate('splits', tickers)), \
+             patch.object(engine, '_fetch_splits', side_effect=lambda tickers, start, through: engine.split_history.validate_history(tickers[0], start, through, provider.xs(tickers[0], axis=1, level=1))), \
              patch.object(engine, '_fetch_dividends', side_effect=lambda tickers: corporate('dividends', tickers)), \
              patch('portfolio_engine.yf.download', side_effect=download), \
              patch('time.sleep'):

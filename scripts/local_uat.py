@@ -34,6 +34,7 @@ sys.path.insert(0, str(root))
 import pandas as pd
 import portfolio_engine as engine
 from app import app
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 assert {pid for pid, _ in engine.list_portfolios()} == expected, 'Incomplete UAT portfolio list'
 port = 5003 if mode == 'live' else 5004
 print(f'LOCAL UAT mode={mode} data={work} URL=http://127.0.0.1:{port}', flush=True)

@@ -1,4 +1,5 @@
 import pricing_sources
+import split_history
 import os
 import csv
 import json
@@ -39,11 +40,14 @@ def get_paths(portfolio_id):
         "shadow_voo": os.path.join(data, "shadow_voo.csv"),
         "shadow_qqq": os.path.join(data, "shadow_qqq.csv"),
         "splits": os.path.join(data, "splits.csv"),
+        "split_status": os.path.join(data, "split_status.json"),
+        "split_attempts": os.path.join(data, "split_attempts.jsonl"),
         "dividends": os.path.join(data, "dividends.csv"),
         "price_history": os.path.join(data, "price_history.csv"),
         "provisional_prices": os.path.join(data, "price_history.provisional"),
         "price_policy": os.path.join(data, "price_history.policy"),
         "price_kinds": os.path.join(data, "price_kinds.json"),
+        "price_receipts": os.path.join(data, "price_receipts.json"),
         "last_updated": os.path.join(data, "last_updated.txt"),
         "daily_values": os.path.join(data, "daily_values.csv"),
         "accounting_snapshot": os.path.join(data, "accounting_snapshot.json"),
@@ -375,7 +379,7 @@ def _accounting_input_fingerprint(paths):
     digest.update(b"accounting-shared-pricing-v2\0")
     for key in (
         "transactions", "splits", "dividends", "manual_dividends", "manual_prices",
-        "price_history", "provisional_prices", "price_policy", "price_kinds", "config",
+        "price_history", "provisional_prices", "price_policy", "price_kinds", "price_receipts", "config",
     ):
         path = paths.get(key)
         digest.update(key.encode("utf-8") + b"\0")
@@ -700,17 +704,10 @@ def _get_all_tickers(paths):
     return tickers
 
 
-def _fetch_splits(tickers):
-    """Fetch split history for a set of tickers."""
-    rows = []
-    for ticker in tickers:
-        t = yf.Ticker(ticker)
-        splits = t.splits
-        if splits is not None and len(splits) > 0:
-            for date, ratio in splits.items():
-                date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
-                rows.append([ticker, date_str, float(ratio)])
-    return rows
+def _fetch_splits(tickers, start=None, through=None):
+    if start is not None and through is not None:
+        return split_history.fetch_history(next(iter(tickers)), start, through)
+    raise ValueError("Split requests require explicit coverage dates")
 
 
 def _merge_cached_actions(path, rows, columns):
@@ -724,43 +721,12 @@ def _merge_cached_actions(path, rows, columns):
             .sort_values(["TICKER", "DATE"])[columns].values.tolist())
 
 
-def sync_splits(paths):
-    """Refresh split data if stale."""
-    last_close = _last_market_close()
-
-    if os.path.exists(paths["splits"]):
-        mtime = datetime.fromtimestamp(
-            os.path.getmtime(paths["splits"]), tz=ZoneInfo("America/New_York")
-        )
-        if mtime.date() >= last_close:
-            return False
-
-    tickers = _get_all_tickers(paths)
-    if not tickers:
-        return False
-
-    old_splits = set()
-    if os.path.exists(paths["splits"]):
-        old_df = pd.read_csv(paths["splits"])
-        for _, r in old_df.iterrows():
-            old_splits.add((r["TICKER"], r["DATE"], float(r["RATIO"])))
-
-    rows = _merge_cached_actions(paths["splits"], _fetch_splits(tickers), ["TICKER", "DATE", "RATIO"])
-
-    new_splits = {(r[0], r[1], r[2]) for r in rows}
-    newly_split_tickers = {t for t, d, r in new_splits - old_splits}
-
-    if newly_split_tickers:
+def sync_splits(paths, force=False):
+    changed = split_history.sync(paths, _last_market_close(),
+        fetch=lambda ticker, start, through: _fetch_splits([ticker], start, through), force=force)
+    if changed:
         _invalidate_daily_values(paths)
-
-    os.makedirs(os.path.dirname(paths["splits"]), exist_ok=True)
-    with open(paths["splits"], "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["TICKER", "DATE", "RATIO"])
-        for row in rows:
-            writer.writerow(row)
-
-    return True
+    return changed
 
 
 def _fetch_dividends(tickers):
@@ -1840,7 +1806,7 @@ def _refresh_data_locked(paths, force=False):
                             os.unlink(target)
         else:
             # Source observations survive a derived-calculation failure.
-            for key in ("price_history", "splits", "dividends", "price_policy", "provisional_prices", "price_kinds"):
+            for key in ("price_history", "splits", "dividends", "price_policy", "provisional_prices", "price_kinds", "price_receipts", "split_status", "split_attempts"):
                 if result.get("observations_committed") and staged.get(key) and os.path.isfile(staged[key]):
                     fd, target = tempfile.mkstemp(dir=data_dir)
                     os.close(fd)
@@ -1884,10 +1850,11 @@ def get_refresh_warning(paths):
 def _refresh_data_staged(paths):
     """Full refresh: sync new transactions, splits, dividends, update prices, and recompute chart."""
     sync(paths)
+    split_error = None
     try:
         sync_splits(paths)
-    except Exception:
-        pass
+    except Exception as exc:
+        split_error = str(exc)
     try:
         sync_dividends(paths)
     except Exception:
@@ -1926,9 +1893,17 @@ def _refresh_data_staged(paths):
         result["usable"] = True
         count = len(result.get("failed_tickers", []))
         result["message"] = (
-            f"Some prices could not be refreshed ({count} symbols). Using available cached prices."
+            ("Some prices could not be refreshed" + (f" ({count} symbols)" if count else "") + ". Using available cached prices.")
             + (" Missing historical chart values are left blank." if any(row.get("MAIN") is None for row in history) else "")
         )
+    split_check = split_history.summary(paths, _last_market_close())
+    result['split_history'] = split_check
+    if split_error or split_check['pending']:
+        result['split_history']['error'] = split_error
+        if result.get('status') == 'ok':
+            result['status'] = 'incomplete'
+            result['usable'] = True
+        result['message'] = (result.get('message', '') + ' ' + (('Split-history check failed: ' + split_error + '. ') if split_error else '') + split_check['message']).strip()
     return result
 
 

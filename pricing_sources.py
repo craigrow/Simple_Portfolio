@@ -35,9 +35,9 @@ def instrument_modes(paths):
 
 
 def fingerprint(paths):
-    digest = hashlib.sha256(b'shared-pricing-v1')
-    for key in ('transactions', 'manual_prices', 'manual_dividends', 'price_history', 'splits', 'config', 'provisional_prices', 'price_kinds'):
-        fallback = str(Path(paths.get('data_dir', Path(paths['price_history']).parent)) / 'price_kinds.json') if key == 'price_kinds' else '/nonexistent'
+    digest = hashlib.sha256(b'shared-pricing-v2')
+    for key in ('transactions', 'manual_prices', 'manual_dividends', 'price_history', 'splits', 'config', 'provisional_prices', 'price_kinds', 'price_receipts'):
+        fallback = str(Path(paths.get('data_dir', Path(paths['price_history']).parent)) / (key + '.json')) if key in {'price_kinds', 'price_receipts'} else '/nonexistent'
         p = Path(paths.get(key, fallback))
         digest.update(key.encode())
         if p.is_file():
@@ -113,7 +113,17 @@ def _cached_book(path_items, generation):
                 receipts = dict(db.execute('SELECT id,recorded_at FROM receipts'))
                 from dataclasses import replace
                 observations = [replace(o, recorded_at=receipts.get(observation_key(o))) for o in observations]
-    return PriceBook(observations, modes, sorted(splits), generation)
+    receipt_path = Path(paths.get('price_receipts') or Path(paths.get('data_dir', Path(paths['price_history']).parent)) / 'price_receipts.json')
+    received = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+    from dataclasses import replace
+    dated = []
+    for obs in observations:
+        receipt = received.get(obs.instrument + '|' + obs.effective_date.isoformat(), {})
+        # CSV float parsing may differ by a few final binary digits.
+        matches = receipt.get('value') is not None and abs(Decimal(receipt['value']) - obs.value) <= abs(obs.value) * Decimal('1e-14')
+        stamp = receipt.get('received_at') if obs.source == 'api' and matches else None
+        dated.append(replace(obs, received_at=stamp))
+    return PriceBook(dated, modes, sorted(splits), generation)
 
 
 def persist_generation(paths, book, outcome):
@@ -145,7 +155,7 @@ def observation_key(obs):
 
 def source_fingerprint(paths):
     return fingerprint({**paths, 'price_history': '/nonexistent', 'price_policy': '/nonexistent',
-                        'splits': '/nonexistent', 'provisional_prices': '/nonexistent', 'price_kinds': '/nonexistent'})
+                        'splits': '/nonexistent', 'provisional_prices': '/nonexistent', 'price_kinds': '/nonexistent', 'price_receipts': '/nonexistent'})
 
 
 from contextlib import contextmanager

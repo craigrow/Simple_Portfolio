@@ -276,3 +276,61 @@ def test_missing_new_session_quote_does_not_create_zero_movers(paths):
     engine._write_price_policy(paths)
     with patch.object(engine,'_baseline_date',return_value=pd.Timestamp('2025-01-03')):
         assert engine.get_gainers_losers([{'TICKER':'XYZ','SHARES_OWNED':10}],paths) == ([],[],[],[])
+
+
+def test_price_receipt_tracks_success_not_cache_reads_or_invalid_quotes(paths):
+    import price_provider
+    from datetime import timezone
+    prices = pd.DataFrame({'XYZ': [22]}, index=pd.to_datetime(['2025-01-20']))
+    prices.to_csv(paths['price_history'])
+    engine._write_price_policy(paths)
+    first = datetime(2025, 1, 21, 15, 30, 12, tzinfo=timezone.utc)
+    later = datetime(2025, 1, 21, 16, 45, 23, tzinfo=timezone.utc)
+    with patch.object(price_provider, 'datetime') as clock:
+        clock.now.return_value = first
+        price_provider._record_quote_kinds(paths, prices, False, initialize=True)
+        assert pricing_sources.load_book(paths).resolve('XYZ', '2025-01-21').received_at is None
+        price_provider._record_quote_kinds(paths, prices, False)
+        initial = pricing_sources.load_book(paths).resolve('XYZ', '2025-01-21')
+        assert initial.received_at == first.isoformat()
+        clock.now.return_value = later
+        price_provider._record_quote_kinds(paths, prices * float('nan'), False)
+        assert pricing_sources.load_book(paths).resolve('XYZ', '2025-01-21').received_at == first.isoformat()
+        price_provider._record_quote_kinds(paths, prices, False)
+    updated = pricing_sources.load_book(paths).resolve('XYZ', '2025-01-21')
+    assert updated.received_at == later.isoformat()
+    assert updated.effective_date == date(2025, 1, 20)
+    assert updated.value == initial.value
+    pricing_sources.persist_generation(paths, pricing_sources.load_book(paths), {'status': 'incomplete'})
+    assert pricing_sources.load_book(paths).resolve('XYZ', '2025-01-21').received_at == later.isoformat()
+
+
+def test_price_update_table_distinguishes_receipt_timestamp_and_quote_date(paths):
+    import price_provider
+    from datetime import timezone
+    prices = pd.DataFrame({'XYZ': [22]}, index=pd.to_datetime(['2025-01-20']))
+    prices.to_csv(paths['price_history'])
+    engine._write_price_policy(paths)
+    with patch.object(price_provider, 'datetime') as clock:
+        clock.now.return_value = datetime(2025, 1, 21, 15, 30, 12, tzinfo=timezone.utc)
+        price_provider._record_quote_kinds(paths, prices, False)
+    with patch('portfolio_engine.yf.download', side_effect=AssertionError('Rendering must not fetch')):
+        response = app.test_client().get('/?portfolio=mixed&auto_refreshed=1')
+    assert response.status_code == 200
+    assert b'Last Price Update (UTC)' in response.data
+    assert b'Quote Date' in response.data
+    assert b'2025-01-21 15:30:12' in response.data
+    assert b'2025-01-20' in response.data
+
+
+def test_receipt_survives_csv_float_roundtrip_but_not_changed_price(paths):
+    import price_provider
+    from pathlib import Path
+    prices = pd.DataFrame({'XYZ': [244.38999938964844]}, index=pd.to_datetime(['2025-01-20']))
+    prices.to_csv(paths['price_history'])
+    engine._write_price_policy(paths)
+    price_provider._record_quote_kinds(paths, prices, False)
+    assert pricing_sources.load_book(paths).resolve('XYZ', '2025-01-20').received_at
+    prices['XYZ'] = 245
+    prices.to_csv(paths['price_history'])
+    assert pricing_sources.load_book(paths).resolve('XYZ', '2025-01-20').received_at is None

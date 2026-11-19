@@ -49,7 +49,7 @@ def test_missing_one_tickers_history_keeps_dashboard_and_benchmarks(tmp_path, mo
     assert history[0]["MAIN"] == 600  # Transaction observation supplies valuation, not a market close.
     assert history[0]["VOO"] == 600
     assert history[-1]["MAIN"] == 920
-    assert result["status"] == ("incomplete" if missing_history else "ok")
+    assert result["status"] == "incomplete"  # Split coverage was not checked in this price-only scenario.
     if missing_history:
         assert result["usable"] is True
     prior_snapshot = snapshot
@@ -99,7 +99,7 @@ def test_split_and_partial_provider_history_preserve_full_dashboard(tmp_path, mo
         client = app.test_client()
         result = client.get('/refresh?portfolio=split-outage').get_json()
         page = client.get('/?portfolio=split-outage&auto_refreshed=1').get_data(as_text=True)
-    assert result['status'] == 'ok'
+    assert result['status'] == 'incomplete'  # Supplied events are not evidence of full coverage.
     snapshot = engine.get_cached_accounting_snapshot(paths)
     assert snapshot['actual']['holdings'][0]['shares'] == 40
     assert snapshot['actual']['total_value'] == 1001

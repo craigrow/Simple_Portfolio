@@ -393,13 +393,13 @@ class TestSyncSplits:
 
     @patch.object(portfolio_engine, "_fetch_splits", return_value=[])
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
-    def test_no_refresh_when_fresh(self, mock_price, mock_splits):
+    def test_unverified_empty_response_is_retried(self, mock_price, mock_splits):
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
         portfolio_engine.sync(_paths())
         portfolio_engine.sync_splits(_paths())
         mock_splits.reset_mock()
         portfolio_engine.sync_splits(_paths())
-        mock_splits.assert_not_called()
+        assert mock_splits.called
 
     def test_no_fetch_when_no_tickers(self):
         result = portfolio_engine.sync_splits(_paths())
@@ -908,7 +908,8 @@ class TestRefreshDataErrorHandling:
                 with patch.object(portfolio_engine, "sync_dividends"):
                     with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
                         result = portfolio_engine.refresh_data(_paths())
-        assert result["status"] == "ok"
+        assert result["status"] == "incomplete"
+        assert result["split_history"]["error"] == "split error"
 
     def test_returns_result_when_dividends_fail(self):
         """refresh_data should still return update_prices result even if dividends throw."""
