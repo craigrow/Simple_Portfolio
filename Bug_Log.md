@@ -37,3 +37,11 @@ data = yf.download(tickers, start=start.strftime("%Y-%m-%d"),
 **Lesson Learned:** Treat repo portfolio directories as a small schema, not as a single transactions file. When adding a new portfolio or changing portfolio metadata, deploy initialization must sync every file required for discovery and bootstrapping. Tests should assert the downstream discovery contract, not just that one copied file exists.
 
 **Location:** `init_data.py`, `sync_transaction_files()` and `tests/test_init_data.py`
+
+### Crypto finality and provisional prices for sold securities
+
+**Status:** Fixed locally on the shared-pricing feature branch; not deployed. Existing production history requires its separately reviewed correction.
+
+The provider refresh previously used equity hours to finalize crypto daily bars, and could clear a whole date's provisional flag while leaving a sold security's intraday price untouched. Refresh now uses UTC daily boundaries for Yahoo `-USD` crypto pairs and existing per-security/date quote kinds for finality. It explicitly requests unresolved historical observations, including sold holdings, and retains their provisional status when the provider omits or returns an invalid value for that cell. Live refresh merges returned prior-day corrections and preserves full price precision. The date-level provisional file remains a conservative compatibility summary.
+
+Regression coverage in `tests/test_price_cache_finality.py` includes equity-close/crypto rollover, weekends, precision, missing/invalid sold quotes, later quotes that cannot clear earlier holes, and correction of prior closes during a live refresh. Existing untracked-cache migration remains supported. This fixes future cache handling; it does not silently certify or rewrite older ambiguous history.

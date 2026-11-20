@@ -1,0 +1,94 @@
+{
+  "reviewed_on": "2026-11-19",
+  "date_convention": "First split-adjusted trading date; ratio is post-event shares per pre-event share.",
+  "events": [
+    {
+      "ticker": "AVGO",
+      "date": "2024-07-15",
+      "ratio": 10,
+      "source_url": "https://investors.broadcom.com/static-files/df9ff86d-bc30-4901-9884-299b17619d46",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "CRWD",
+      "date": "2026-07-02",
+      "ratio": 4,
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1535527/000153552726000022/crwd-20260603.htm",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "EMBJ",
+      "date": "2026-11-16",
+      "ratio": 4,
+      "source_url": "https://embraer.com/media-center?detail=33634&mediatype=NEWS",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "LRCX",
+      "date": "2024-10-03",
+      "ratio": 10,
+      "source_url": "https://investor.lamresearch.com/faqs/",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "MNST",
+      "date": "2026-08-11",
+      "ratio": 2,
+      "source_url": "https://www.sec.gov/Archives/edgar/data/865752/000110465926081842/tm2619964d1_ex99-1.htm",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "NFLX",
+      "date": "2025-11-17",
+      "ratio": 10,
+      "source_url": "https://ir.netflix.net/investor-news-and-events/financial-releases/press-release-details/2025/Netflix-Announces-Ten-For-One-Stock-Split/default.aspx",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "NVDA",
+      "date": "2024-06-10",
+      "ratio": 10,
+      "source_url": "https://investor.nvidia.com/files/doc_downloads/2024/05/NVIDIA-2024-Stock-Split-FAQ.pdf",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "QLD",
+      "date": "2025-11-20",
+      "ratio": 2,
+      "source_url": "https://www.proshares.com/press-releases/proshares-announces-etf-share-splits5",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "TQQQ",
+      "date": "2021-01-21",
+      "ratio": 2,
+      "source_url": "https://infomemo.theocc.com/infomemos?number=48156",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "TQQQ",
+      "date": "2022-01-13",
+      "ratio": 2,
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1415311/000119312521365127/d269330dex991.htm",
+      "source_type": "issuer or regulatory notice"
+    },
+    {
+      "ticker": "TQQQ",
+      "date": "2025-11-20",
+      "ratio": 2,
+      "source_url": "https://www.proshares.com/press-releases/proshares-announces-etf-share-splits5",
+      "source_type": "issuer or regulatory notice"
+    }
+  ],
+  "scope_notes": {
+    "VCX": {
+      "listed_on": "2026-03-19",
+      "source_url": "https://fundrise.com/investor-update/1385/view",
+      "note": "Pre-listing ledger dates are legitimate private-fund ownership. Market-provider coverage cannot verify that private period."
+    },
+    "EMBJ": {
+      "missing_provider_session": "2026-11-16",
+      "note": "Issuer confirms the ADS ratio change on this date; do not discard it because the daily price row is absent."
+    }
+  }
+}

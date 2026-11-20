@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 import os
 import pandas as pd
 import portfolio_engine
@@ -8,6 +8,39 @@ app = Flask(__name__)
 # Seed the directory the app actually uses, including local/no-disk hosts.
 import init_data
 init_data.seed_empty_derived_files(init_data.SEED_SRC, portfolio_engine.PORTFOLIOS_DIR)
+
+
+@app.before_request
+def lock_price_generation():
+    if request.endpoint not in {"index", "stats"}:
+        return
+    portfolios = portfolio_engine.list_portfolios()
+    if not portfolios:
+        return
+    pid = request.args.get("portfolio")
+    if pid not in dict(portfolios):
+        pid = portfolios[0][0]
+    g.price_lock = portfolio_engine.pricing_sources.data_lock(portfolio_engine.get_paths(pid))
+    g.price_lock.__enter__()
+
+
+@app.teardown_request
+def unlock_price_generation(error=None):
+    lock = g.pop("price_lock", None)
+    if lock:
+        lock.__exit__(None, None, None)
+
+
+@app.context_processor
+def refresh_warning_context():
+    portfolios = portfolio_engine.list_portfolios()
+    pid = request.args.get("portfolio")
+    if pid not in [p[0] for p in portfolios]:
+        pid = portfolios[0][0] if portfolios else None
+    return {"split_history": portfolio_engine.split_history.summary(portfolio_engine.get_paths(pid), portfolio_engine._last_market_close()) if pid else None,
+            "price_updates": portfolio_engine.get_price_updates(portfolio_engine.get_paths(pid)) if pid else [],
+            "refresh_warning": portfolio_engine.get_refresh_warning(
+        portfolio_engine.get_paths(pid)) if pid else ""}
 
 
 def _decision_rows(snapshot):
@@ -49,12 +82,17 @@ def _holding_rows(snapshot):
     } for holding in snapshot["actual"]["holdings"]]
 
 
-def _refresh_all_portfolios(portfolios):
+def _refresh_all_portfolios(portfolios, force=False):
     results = {}
     failed = []
     incomplete = []
     for pid, _ in portfolios:
-        result = portfolio_engine.refresh_data(portfolio_engine.get_paths(pid))
+        try:
+            paths = portfolio_engine.get_paths(pid)
+            result = (portfolio_engine.refresh_data(paths, force=True) if force
+                      else portfolio_engine.refresh_data(paths))
+        except Exception as exc:
+            result = {"status": "error", "message": str(exc)}
         results[pid] = result
         status = result.get("status")
         if status == "error":
@@ -100,7 +138,9 @@ def index():
     # derived data, keep the dashboard available with the last readable cache.
     try:
         portfolio_engine.sync(paths)
-        portfolio_engine.sync_manual_prices(paths)
+        source_kind = pd.read_csv(paths["transactions"], nrows=0)
+        if "ACTION" not in source_kind.columns:
+            portfolio_engine.sync_manual_prices(paths)
     except Exception:
         pass
     port_df, shadow_voo_df, shadow_qqq_df = portfolio_engine.load_all(paths)
@@ -128,13 +168,17 @@ def index():
         except Exception as exc:
             accounting = portfolio_engine.get_cached_accounting_snapshot(paths)
             accounting_error = str(exc)
+            if accounting:
+                accounting_error = "Showing previous ledger snapshot as of " + str(accounting.get("valuation_date")) + ": " + accounting_error
         if accounting is not None:
             history = portfolio_engine.get_cached_daily_values(paths)
-            if not history and os.path.exists(prices_path):
+            chart_stale = (portfolio_engine._cached_accounting_fingerprint(paths)
+                           != portfolio_engine._accounting_input_fingerprint(paths))
+            if not history or chart_stale:
                 try:
                     history = portfolio_engine.compute_daily_values(paths)
-                except Exception:
-                    history = []
+                except Exception as exc:
+                    accounting_error = f"Using previous chart: {exc}"
             portfolio_summary = _holding_rows(accounting)
             actual = accounting["actual"]
             voo = accounting["portfolio_benchmarks"]["VOO"]
@@ -160,6 +204,7 @@ def index():
                 portfolio_id=portfolio_id,
                 portfolio_name=portfolio_name,
                 accounting=accounting,
+                price_updates=accounting.get("price_updates", []),
                 accounting_error=accounting_error,
                 decisions=_decision_rows(accounting),
                 portfolio_summary=portfolio_summary,
@@ -169,7 +214,7 @@ def index():
                 losers=losers,
                 pct_gainers=pct_gainers,
                 pct_losers=pct_losers,
-                last_updated=portfolio_engine.get_last_updated(paths),
+                last_updated=portfolio_engine.get_snapshot_price_label(accounting),
                 needs_refresh=portfolio_engine.needs_refresh(paths),
                 auto_refresh=portfolio_engine.should_auto_refresh(paths),
                 portfolio=[], shadow_voo=[], shadow_qqq=[], columns=[], shadow_columns=[],
@@ -300,17 +345,12 @@ def refresh():
             return jsonify({"status": "ok", "message": "No portfolios"})
         force = request.args.get("force") == "1"
         if request.args.get("all") == "1":
-            if force:
-                for pid, _ in portfolios:
-                    portfolio_engine.invalidate_all_caches(
-                        portfolio_engine.get_paths(pid))
-            return jsonify(_refresh_all_portfolios(portfolios))
+            return jsonify(_refresh_all_portfolios(portfolios, force=force))
         if not portfolio_id or portfolio_id not in [p[0] for p in portfolios]:
             portfolio_id = portfolios[0][0]
         paths = portfolio_engine.get_paths(portfolio_id)
-        if force:
-            portfolio_engine.invalidate_all_caches(paths)
-        result = portfolio_engine.refresh_data(paths)
+        result = (portfolio_engine.refresh_data(paths, force=True) if force
+                  else portfolio_engine.refresh_data(paths))
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})

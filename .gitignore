@@ -10,3 +10,12 @@ portfolios/*/data/*.policy
 portfolios/*/data/accounting_snapshot.json
 !portfolios/*/data/.gitkeep
 portfolios/*/backup_*/
+
+# Environment-local pricing and corporate-action audit state
+portfolios/*/data/*.sqlite3*
+portfolios/*/data/price_kinds.json
+portfolios/*/data/price_receipts.json
+portfolios/*/data/refresh_status.json
+portfolios/*/data/split_status.json
+portfolios/*/data/split_attempts.jsonl
+portfolios/*/data/.pricing.lock
