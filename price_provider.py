@@ -56,18 +56,11 @@ def _price_cache_is_tracked(paths):
     return bool(path) and os.path.exists(path)
 
 def _migrate_legacy_price_cache(paths, cached, fetched_cols):
-    """Establish provisional tracking for a price cache written before it existed.
+    """Mark the newest untracked row for reconciliation.
 
-    A legacy cache's newest fetched row may be an intraday snapshot that was
-    frozen in as that day's close — the original bug. Which rows are affected
-    was never recorded, but only the newest one can still be wrong: any earlier
-    intraday row was already overwritten by a later backfill covering its date.
-    So treat just the newest row as provisional. It is then re-fetched on this
-    run and excluded from baselines meanwhile, and the cache self-heals at the
-    cost of one extra day of prices rather than a full history rebuild.
-
-    Older rows are left alone deliberately: rewriting all of history would be
-    slow, and the intraday-frozen row is by construction the most recent one."""
+    Older ambiguous history requires a separate audit; this migration cannot
+    prove that earlier snapshots were final closes.
+    """
     if _price_cache_is_tracked(paths):
         return
     newest = None
@@ -130,6 +123,34 @@ def _set_last_updated(paths, close_date=None, intraday=False):
     with open(paths["last_updated"], "w") as f:
         f.write(val)
     return val
+
+def _crypto(ticker):
+    # Yahoo crypto pairs in our portfolios use the -USD symbol convention.
+    return ticker.endswith("-USD")
+
+
+def _session_today(ticker):
+    return datetime.now(timezone.utc if _crypto(ticker) else ZoneInfo("America/New_York")).date()
+
+
+def _unfinished(ticker, day, market_open):
+    today = _session_today(ticker)
+    return day >= today if _crypto(ticker) else day > today or (day == today and market_open)
+
+
+def _quote_kinds(paths):
+    path = paths.get("price_kinds") or os.path.join(paths["data_dir"], "price_kinds.json")
+    with open(path) as stream:
+        return json.load(stream)
+
+
+def _sync_provisional_dates(paths):
+    # Compatibility summary only: finality decisions use per-security kinds.
+    _write_provisional_dates(paths, {
+        key.rsplit("|", 1)[1] for key, kind in _quote_kinds(paths).items()
+        if kind == "intraday"
+    })
+
 
 def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history=False):
     """Acquire observations; unavailable history never determines portfolio availability."""
@@ -204,8 +225,22 @@ def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history
     # A cache written before provisional tracking existed may already have an
     # intraday price frozen into its newest row. Adopt it here so it re-fetches.
     _migrate_legacy_price_cache(paths, cached, fetched_cols)
-    provisional_dates = _read_provisional_dates(paths)
     _record_quote_kinds(paths, cached, market_open, initialize=True)
+    kinds = _quote_kinds(paths)
+    targets = {t: (_session_today(t) - pd.Timedelta(days=1) if _crypto(t) else close_date)
+               for t in all_tickers}
+    pending = {}
+    for t in fetched_cols:
+        for day in cached[t].dropna().index:
+            if kinds.get(t + "|" + day.strftime("%Y-%m-%d")) == "intraday" and day.date() <= targets[t]:
+                pending.setdefault(t, []).append(day)
+    def settled_dates(ticker):
+        if ticker not in cached:
+            return []
+        return [d for d in cached[ticker].dropna().index
+                if kinds.get(ticker + "|" + d.strftime("%Y-%m-%d")) in (
+                    {"close"} if uses_event_ledger else {"close", "legacy"})]
+
     event_history_incomplete = False
     if uses_event_ledger and earliest is not None:
         # Replay needs a settled price for every market ticker on or before the
@@ -216,111 +251,37 @@ def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history
                 event_history_incomplete = True
                 break
             settled = pd.to_numeric(cached[ticker], errors="coerce").dropna()
-            settled = settled[
-                [d.strftime("%Y-%m-%d") not in provisional_dates for d in settled.index]
-            ]
+            settled = settled.loc[settled.index.isin(settled_dates(ticker))]
             prior = settled.loc[settled.index <= required_date]
             if prior.empty or (required_date.date() - prior.index[-1].date()).days > 7:
                 event_history_incomplete = True
                 break
 
-    if uses_event_ledger:
-        current_by_ticker = []
-        for ticker in event_current_tickers:
-            if ticker not in cached.columns:
-                current_by_ticker.append(False)
-                continue
-            settled = pd.to_numeric(cached[ticker], errors="coerce").dropna()
-            settled_dates = [
-                d for d in settled.index
-                if d.strftime("%Y-%m-%d") not in provisional_dates
-            ]
-            current_by_ticker.append(
-                bool(settled_dates) and max(settled_dates).date() >= close_date
-            )
-        cache_current = bool(current_by_ticker) and all(current_by_ticker)
-        cache_current = cache_current and not event_history_incomplete
-    elif fetched_cols:
-        cache_current = all(
-            t in cached and any(
-                d.date() >= close_date and d.strftime("%Y-%m-%d") not in provisional_dates
-                for d in cached[t].dropna().index
-            ) for t in all_tickers
-        )
-    else:
-        cache_current = False
+    cache_current = bool(event_current_tickers) and all(
+        settled_dates(t) and max(settled_dates(t)).date() >= targets[t]
+        for t in event_current_tickers
+    ) and not event_history_incomplete and not pending
 
-    # If cache covers last close and market is open, fetch live intraday prices
-    if cache_current and market_open:
-        try:
-            end = pd.Timestamp.now(tz="America/New_York").normalize() + pd.Timedelta(days=1)
-            start = end - pd.Timedelta(days=5)
-            data = yf.download(
-                all_tickers,
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-                progress=False,
-                auto_adjust=False,
-            )
-            if not data.empty:
-                close = data["Close"]
-                if isinstance(close, pd.Series):
-                    close = close.to_frame(name=all_tickers[0])
-                close = close.apply(pd.to_numeric, errors="coerce")
-                close = close.where((close > 0) & (close < float("inf")))
-                live = {}
-                today = datetime.now(ZoneInfo("America/New_York")).date()
-                for t in all_tickers:
-                    if t in close.columns:
-                        idx = close[t].last_valid_index()
-                        if idx is not None and idx.date() == today:
-                            live[t] = float(close[t].loc[idx])
-                missing = [t for t in event_current_tickers if t not in live]
-                if missing and not allow_partial_history:
-                    return {"status": "incomplete", "failed_tickers": sorted(missing)}
-                if live:
-                    # Write today's intraday row into cache and flag it provisional
-                    # so it is re-fetched after the close and never used as a
-                    # prior-close baseline.
-                    today = pd.Timestamp(datetime.now(ZoneInfo("America/New_York")).date())
-                    intraday_row = pd.DataFrame(live, index=[today])
-                    hist = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
-                    combined = intraday_row.combine_first(hist).sort_index()
-                    combined.to_csv(paths["price_history"])
-                    _mark_provisional(paths, today.strftime("%Y-%m-%d"))
-                    _record_quote_kinds(paths, intraday_row, market_open=True)
-                    if missing:
-                        return {"status": "incomplete", "failed_tickers": sorted(missing)}
-                    _set_last_updated(paths, intraday=True)
-                    return {"status": "ok"}
-        except Exception as exc:
-            return {"status": "incomplete", "message": f"Live prices unavailable: {exc}"}
-        return {"status": "incomplete", "message": "Live prices unavailable"}
-
-    # If cache is current and market is closed, nothing to do
-    if cache_current:
+    # Crypto remains live outside equity hours, including weekends. Reconcile
+    # returned prior bars too, rather than discarding everything except today.
+    live_requested = market_open or any(_crypto(t) for t in event_current_tickers)
+    if cache_current and not live_requested:
         return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
-    # Backfill: determine start date for historical fetch. Base the resume point
-    # on the fetched tickers' last date, not the whole cache — a manual portfolio
-    # may hold manual price dates beyond the last benchmark date.
-    fetched_last = None
-    if fetched_cols and not event_history_incomplete:
-        fetched_idx = cached[fetched_cols].dropna(how="all").index
-        # Resume from the last *settled* date. Resuming past a provisional row
-        # would leave its intraday price in place permanently.
-        settled_idx = [d for d in fetched_idx
-                       if d.strftime("%Y-%m-%d") not in provisional_dates]
-        if len(settled_idx):
-            fetched_last = max(settled_idx)
-    if fetched_last is not None:
-        start = (fetched_last + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    elif earliest is not None:
+
+    requested = set(all_tickers if event_history_incomplete else event_current_tickers) | set(pending)
+    if event_history_incomplete or any(not settled_dates(t) for t in requested):
+        if earliest is None:
+            return {"status": "incomplete", "message": "No history start date"}
         start = (earliest - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
     else:
-        return {"status": "ok", "last_updated": _set_last_updated(paths, close_date=close_date)}
+        starts = [max(settled_dates(t)) + pd.Timedelta(days=1) for t in requested]
+        starts.extend(d for days in pending.values() for d in days)
+        if live_requested:
+            starts.append(pd.Timestamp(min(_session_today(t) for t in requested)) - pd.Timedelta(days=4))
+        start = min(starts).strftime("%Y-%m-%d")
 
     # Fetch with retries for missing tickers
-    remaining = list(all_tickers if event_history_incomplete else event_current_tickers)
+    remaining = sorted(requested)
     new_frames = []
 
     for attempt in range(max_retries):
@@ -346,14 +307,25 @@ def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history
                 and close[t].last_valid_index() is not None
                 and (
                     t not in event_current_tickers
-                    or close[t].last_valid_index().date() >= close_date
+                    or close[t].last_valid_index().date() >= (
+                        _session_today(t) if live_requested and (_crypto(t) or market_open)
+                        else targets[t]
+                    )
                 )
             ]
+            # A later quote cannot settle a missing earlier provisional cell.
+            got = [t for t in got if all(
+                d in close.index and pd.notna(close.loc[d, t])
+                for d in pending.get(t, [])
+            )]
             remaining = [t for t in remaining if t not in got]
         except Exception:
             pass
         if remaining and attempt < max_retries - 1:
             time.sleep(3)
+
+    if cache_current and remaining and not allow_partial_history:
+        return {"status": "incomplete", "failed_tickers": sorted(remaining)}
 
     history_gaps = []
     # Historical gaps do not invalidate independently usable current prices or
@@ -395,20 +367,7 @@ def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history
             os.makedirs(os.path.dirname(paths["price_history"]), exist_ok=True)
             combined.to_csv(paths["price_history"])
             _record_quote_kinds(paths, new_data, market_open)
-            # Any date we just fetched a real close for is no longer provisional.
-            if provisional_dates:
-                fetched_real = {d.strftime("%Y-%m-%d") for d in new_data.index}
-                remaining_provisional = provisional_dates - fetched_real
-                if remaining_provisional != provisional_dates:
-                    _write_provisional_dates(paths, remaining_provisional)
-                    provisional_dates = remaining_provisional
-            # A backfill run during market hours brings back today's in-progress
-            # bar, which is an intraday price wearing a close's clothing. Flag it
-            # so it gets re-fetched and can never serve as a prior-close baseline.
-            if market_open:
-                today_str = datetime.now(ZoneInfo("America/New_York")).date().strftime("%Y-%m-%d")
-                if any(d.strftime("%Y-%m-%d") == today_str for d in new_data.index):
-                    _mark_provisional(paths, today_str)
+            _sync_provisional_dates(paths)
             # Rebuild the chart cache so it reflects corrected closes.
             # The coordinator invalidates derived values via input fingerprints.
 
@@ -422,7 +381,7 @@ def refresh(paths, close_date, market_open, max_retries=3, allow_partial_history
 
     if uses_event_ledger:
         _write_price_policy(paths)
-    ts = _set_last_updated(paths, close_date=close_date)
+    ts = _set_last_updated(paths, close_date=close_date, intraday=live_requested)
     return {"status": "ok", "last_updated": ts}
 
 
@@ -433,7 +392,6 @@ def _record_quote_kinds(paths, prices, market_open, initialize=False):
     receipts = json.loads(open(receipts_path).read()) if os.path.exists(receipts_path) else {}
     received_at = datetime.now(timezone.utc).isoformat()
     provisional = _read_provisional_dates(paths)
-    today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     static_tickers = _manual_tickers(paths)
     for ticker in prices:
         if ticker in static_tickers:
@@ -444,10 +402,13 @@ def _record_quote_kinds(paths, prices, market_open, initialize=False):
             day = pd.Timestamp(day).date().isoformat()
             key = ticker + "|" + day
             if initialize:
-                kind = ("intraday" if day in provisional else "close") if _price_policy_is_current(paths) else "legacy"
-                kinds.setdefault(key, kind)
+                kind = "intraday" if day in provisional else ("close" if _price_policy_is_current(paths) else "legacy")
+                if _unfinished(ticker, pd.Timestamp(day).date(), market_open):
+                    kinds[key] = "intraday"
+                else:
+                    kinds.setdefault(key, kind)
             else:
-                kinds[key] = "intraday" if market_open and day == today else "close"
+                kinds[key] = "intraday" if _unfinished(ticker, pd.Timestamp(day).date(), market_open) else "close"
                 receipts[key] = {"value": str(Decimal(str(value)).normalize()), "received_at": received_at}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as stream:
