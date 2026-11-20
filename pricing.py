@@ -8,7 +8,7 @@ from collections import defaultdict
 PRIORITY = {'legacy': 0, 'execution': 1, 'manual': 2, 'intraday': 3, 'close': 4}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Observation:
     instrument: str
     effective_date: date
@@ -27,7 +27,7 @@ class Observation:
             raise ValueError('Unknown price kind')
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PriceResult:
     value: Decimal | None
     effective_date: date | None
