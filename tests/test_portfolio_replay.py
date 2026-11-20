@@ -227,7 +227,7 @@ class TestBenchmarkPriceDates:
 
         assert result["portfolio_benchmarks"]["VOO"]["lots"][0]["price_date"] == "2025-01-03"
 
-    def test_rejects_stale_transaction_price(self):
+    def test_carries_benchmark_price_with_estimate_disclosure(self):
         ledger = _ledger([
             ["B000001", "2025-01-20", "BUY", "XYZ", 10, 100, ""],
         ])
@@ -236,8 +236,9 @@ class TestBenchmarkPriceDates:
             "2025-01-20": {"XYZ": 10, "VOO": None, "QQQ": None},
         })
 
-        with pytest.raises(ReplayError, match="within 7 days"):
-            replay(ledger, market, valuation_date=date(2025, 1, 20))
+        result = replay(ledger, market, valuation_date=date(2025, 1, 20))
+        assert result["portfolio_benchmarks"]["VOO"]["estimated"] is True
+        assert result["portfolio_benchmarks"]["VOO"]["total_value"] == 1000
 
 
 class TestHistory:
@@ -253,6 +254,7 @@ class TestHistory:
         }, index=pd.to_datetime(["2025-01-01", "2025-02-01", "2025-03-01"]))
         transactions.to_csv(tmp_path / "transactions.csv", index=False)
         prices.to_csv(tmp_path / "prices.csv")
+        (tmp_path / "prices.csv.policy").write_text("unadjusted-close-v1")
         paths = {
             "transactions": str(tmp_path / "transactions.csv"),
             "price_history": str(tmp_path / "prices.csv"),

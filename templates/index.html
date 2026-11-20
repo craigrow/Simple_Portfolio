@@ -106,6 +106,8 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 </div>
 
 <div class="container">
+    {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
+    {% if split_history %}<div class="warning">{{ split_history.message }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
@@ -124,20 +126,26 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         </div>
         <div class="card">
             <div class="card-label">vs VOO (S&P 500)</div>
-            <div class="card-value">${{ "{:,.0f}".format(voo_total) }}</div>
+            <div class="card-value">{% if voo_total is not none %}${{ "{:,.0f}".format(voo_total) }}{% else %}Unavailable{% endif %}</div>
             <div class="card-sub">Invested ${{ "{:,.0f}".format(voo_invested) }}</div>
             <div class="card-sub">Dividends ${{ "{:,.2f}".format(voo_divs) }}</div>
+            {% if voo_total is not none %}
             {% set diff_voo = main_total - voo_total %}
             <div class="card-sub {{ 'positive' if diff_voo >= 0 else 'negative' }}">{{ "Ahead" if diff_voo >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_voo|abs) }}</div>
+            {% else %}<div class="card-sub">Missing benchmark price history</div>{% endif %}
+            {% if accounting and accounting.portfolio_benchmarks.VOO.estimated %}<div class="card-sub">Estimated using carried prices</div>{% endif %}
             {% if accounting %}<div class="card-sub">XIRR {% if accounting.portfolio_benchmarks.VOO.xirr is not none %}{{ "{:.2f}".format(accounting.portfolio_benchmarks.VOO.xirr * 100) }}%{% else %}—{% endif %}</div>{% endif %}
         </div>
         <div class="card">
             <div class="card-label">vs QQQ (NASDAQ)</div>
-            <div class="card-value">${{ "{:,.0f}".format(qqq_total) }}</div>
+            <div class="card-value">{% if qqq_total is not none %}${{ "{:,.0f}".format(qqq_total) }}{% else %}Unavailable{% endif %}</div>
             <div class="card-sub">Invested ${{ "{:,.0f}".format(qqq_invested) }}</div>
             <div class="card-sub">Dividends ${{ "{:,.2f}".format(qqq_divs) }}</div>
+            {% if qqq_total is not none %}
             {% set diff_qqq = main_total - qqq_total %}
             <div class="card-sub {{ 'positive' if diff_qqq >= 0 else 'negative' }}">{{ "Ahead" if diff_qqq >= 0 else "Behind" }} by ${{ "{:,.2f}".format(diff_qqq|abs) }}</div>
+            {% else %}<div class="card-sub">Missing benchmark price history</div>{% endif %}
+            {% if accounting and accounting.portfolio_benchmarks.QQQ.estimated %}<div class="card-sub">Estimated using carried prices</div>{% endif %}
             {% if accounting %}<div class="card-sub">XIRR {% if accounting.portfolio_benchmarks.QQQ.xirr is not none %}{{ "{:.2f}".format(accounting.portfolio_benchmarks.QQQ.xirr * 100) }}%{% else %}—{% endif %}</div>{% endif %}
         </div>
         {% if market_today %}
@@ -214,6 +222,7 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         <button class="tab" onclick="showTab('history-table', this)">Daily Values</button>
         <button class="tab" onclick="showTab('shadow-voo', this)">{{ "VOO Benchmark" if accounting else "Shadow VOO" }}</button>
         <button class="tab" onclick="showTab('shadow-qqq', this)">{{ "QQQ Benchmark" if accounting else "Shadow QQQ" }}</button>
+        <button class="tab" onclick="showTab('price-updates', this)">Price Updates</button>
     </div>
 
     {% if portfolio_summary %}
@@ -254,8 +263,8 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
                     <td class="text-right">${{ "{:,.2f}".format(row.ACTUAL_VALUE) }}</td>
                     <td class="text-right {{ 'positive' if row.ACTUAL_GAIN >= 0 else 'negative' }}">{{ "+" if row.ACTUAL_GAIN >= 0 else "-" }}${{ "{:,.2f}".format(row.ACTUAL_GAIN|abs) }}</td>
                     <td class="text-right">{% if row.IRR is not none %}{{ "{:.2f}".format(row.IRR) }}%{% else %}—{% endif %}</td>
-                    <td class="text-right {{ 'positive' if row.VS_VOO >= 0 else 'negative' }}">{{ "+" if row.VS_VOO >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_VOO|abs) }}</td>
-                    <td class="text-right {{ 'positive' if row.VS_QQQ >= 0 else 'negative' }}">{{ "+" if row.VS_QQQ >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_QQQ|abs) }}</td>
+                    <td class="text-right{% if row.VS_VOO is not none %} {{ 'positive' if row.VS_VOO >= 0 else 'negative' }}{% endif %}">{% if row.VS_VOO is not none %}{{ "+" if row.VS_VOO >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_VOO|abs) }}{% else %}—{% endif %}</td>
+                    <td class="text-right{% if row.VS_QQQ is not none %} {{ 'positive' if row.VS_QQQ >= 0 else 'negative' }}{% endif %}">{% if row.VS_QQQ is not none %}{{ "+" if row.VS_QQQ >= 0 else "-" }}${{ "{:,.2f}".format(row.VS_QQQ|abs) }}{% else %}—{% endif %}</td>
                     <td class="text-left">{{ row.SELL_DATE if row.SELL_DATE else "—" }}</td>
                     <td class="text-left">{{ row.STATUS }}</td>
                 </tr>
@@ -287,8 +296,9 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
     <div id="shadow-voo" class="tab-panel">
         {% if accounting %}
         {% set b = accounting.portfolio_benchmarks.VOO %}
+        {% if b.total_value is none %}<p style="padding:1.5rem;">Benchmark unavailable: missing price needed for a contribution or valuation.</p>{% else %}
         <div style="padding:1.5rem;"><p>This is the continuous same-contribution portfolio benchmark. Actual sales do not sell these shares.</p>
-        <p style="margin-top:.75rem;">{{ "{:,.5f}".format(b.shares) }} VOO shares · ${{ "{:,.2f}".format(b.security_value) }} securities · ${{ "{:,.2f}".format(b.cash) }} cash · ${{ "{:,.2f}".format(b.total_value) }} total</p></div>
+        <p style="margin-top:.75rem;">{{ "{:,.5f}".format(b.shares) }} VOO shares · ${{ "{:,.2f}".format(b.security_value) }} securities · ${{ "{:,.2f}".format(b.cash) }} cash · ${{ "{:,.2f}".format(b.total_value) }} total</p></div>{% endif %}
         {% else %}
         {{ render_txn_table("Shadow — VOO (S&P 500)", shadow_voo, shadow_columns, false) }}
         {% endif %}
@@ -297,20 +307,40 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
     <div id="shadow-qqq" class="tab-panel">
         {% if accounting %}
         {% set b = accounting.portfolio_benchmarks.QQQ %}
+        {% if b.total_value is none %}<p style="padding:1.5rem;">Benchmark unavailable: missing price needed for a contribution or valuation.</p>{% else %}
         <div style="padding:1.5rem;"><p>This is the continuous same-contribution portfolio benchmark. Actual sales do not sell these shares.</p>
-        <p style="margin-top:.75rem;">{{ "{:,.5f}".format(b.shares) }} QQQ shares · ${{ "{:,.2f}".format(b.security_value) }} securities · ${{ "{:,.2f}".format(b.cash) }} cash · ${{ "{:,.2f}".format(b.total_value) }} total</p></div>
+        <p style="margin-top:.75rem;">{{ "{:,.5f}".format(b.shares) }} QQQ shares · ${{ "{:,.2f}".format(b.security_value) }} securities · ${{ "{:,.2f}".format(b.cash) }} cash · ${{ "{:,.2f}".format(b.total_value) }} total</p></div>{% endif %}
         {% else %}
         {{ render_txn_table("Shadow — QQQ (NASDAQ)", shadow_qqq, shadow_columns, false) }}
         {% endif %}
     </div>
 
+    <div id="price-updates" class="tab-panel">
+        <p style="padding:1rem;">Last Price Update is when the app successfully received the API price, or first stored a manual or transaction valuation. Times are shown in UTC. Quote Date is when that price applies; refreshing an old quote does not change its date. Historical receipt times that were never recorded are shown as unavailable.</p>
+        <table class="auto-sort">
+            <thead><tr><th class="sortable text-left">Ticker</th><th class="sortable text-right">Price</th><th class="sortable text-left">Quote Date</th><th class="sortable text-left">Source</th><th class="sortable text-left">Status</th><th class="sortable text-left">Last Price Update (UTC)</th></tr></thead>
+            <tbody>{% for row in price_updates %}
+                <tr><td class="text-left">{{ row.ticker }}</td><td class="text-right">{% if row.value is not none %}${{ "{:,.5f}".format(row.value) }}{% else %}—{% endif %}</td><td class="text-left">{{ row.effective_date or "No price available" }}</td><td class="text-left">{{ row.source or "—" }}</td><td class="text-left">{{ row.status }}</td><td class="text-left">{% set updated_at = row.received_at if row.source == "api" else row.recorded_at %}{{ updated_at[:19]|replace("T", " ") if updated_at else "Not recorded" }}</td></tr>
+            {% endfor %}</tbody>
+        </table>
+    </div>
+
+    {% if split_history %}
+    <details style="margin:1rem 0;" id="split-coverage">
+        <summary>Split-history coverage and review status</summary>
+        <p>Provider coverage is not independent verification. A successful quote refresh does not certify split completeness.</p>
+        <table><thead><tr><th>Ticker</th><th>Status</th><th>Required from</th><th>Provider checked through</th><th>Last successful check (UTC)</th><th>Review findings</th></tr></thead><tbody>
+        {% for row in split_history.rows %}<tr><td>{{ row.ticker }}</td><td>{{ row.status|replace('_', ' ') }}</td><td>{{ row.required_from }}</td><td>{{ row.covered_through or 'Not established' }}</td><td>{{ row.last_success_at[:19]|replace('T', ' ') if row.last_success_at else 'Not recorded' }}</td><td>{{ row.issues|join('; ') if row.issues else '' }}</td></tr>{% endfor %}
+        </tbody></table>
+    </details>
+    {% endif %}
     <div id="history-table" class="tab-panel">
         {% if history %}
         <table class="auto-sort">
             <thead><tr><th class="sortable text-left">Date</th><th class="sortable text-right">Portfolio</th><th class="sortable text-right">VOO</th><th class="sortable text-right">QQQ</th></tr></thead>
             <tbody>
                 {% for row in history %}
-                <tr><td class="text-left">{{ row.DATE }}</td><td class="text-right">${{ "{:,.2f}".format(row.MAIN) }}</td><td class="text-right">${{ "{:,.2f}".format(row.VOO) }}</td><td class="text-right">${{ "{:,.2f}".format(row.QQQ) }}</td></tr>
+                <tr><td class="text-left">{{ row.DATE }}</td><td class="text-right">{% if row.MAIN is not none %}${{ "{:,.2f}".format(row.MAIN) }}{% else %}—{% endif %}</td><td class="text-right">{% if row.VOO is not none %}${{ "{:,.2f}".format(row.VOO) }}{% else %}—{% endif %}</td><td class="text-right">{% if row.QQQ is not none %}${{ "{:,.2f}".format(row.QQQ) }}{% else %}—{% endif %}</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -495,7 +525,15 @@ function refreshData(refreshAll) {
     fetch(refreshUrl)
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.status === "ok") {
+            var results = data.results || {};
+            var warnings = Object.keys(results).filter(function(pid) {
+                return results[pid].status !== "ok";
+            }).map(function(pid) {
+                return pid + ": " + (results[pid].message || "Prices unavailable; using previous data");
+            });
+            var updated = Object.keys(results).some(function(pid) { return results[pid].status === "ok" || results[pid].usable; });
+            if (data.status === "ok" || data.usable || updated) {
+                if (warnings.length) sessionStorage.setItem("portfolioRefreshWarning", "Updated with some cached or missing prices.");
                 status.textContent = "Updated. Reloading…";
                 setTimeout(function() {
                     var url = new URL(window.location.href);
@@ -503,13 +541,18 @@ function refreshData(refreshAll) {
                     window.location.replace(url.toString());
                 }, 500);
             }
-            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.failed_tickers||[]).join(", "); }
+            else if (data.status === "incomplete") { status.textContent = "Refresh incomplete: " + (data.message || (data.failed_tickers||[]).join(", ")); }
             else { status.textContent = "Refresh failed: " + data.message; }
         })
         .catch(function(e) { status.textContent = "Refresh failed: " + e; });
 }
 
 (function() {
+    var warning = sessionStorage.getItem("portfolioRefreshWarning");
+    if (warning) {
+        document.getElementById("refresh-status").textContent = warning;
+        sessionStorage.removeItem("portfolioRefreshWarning");
+    }
     var autoRefresh = {{ auto_refresh|tojson }};
     if (!autoRefresh) return;
     var url = new URL(window.location.href);

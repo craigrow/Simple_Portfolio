@@ -393,13 +393,13 @@ class TestSyncSplits:
 
     @patch.object(portfolio_engine, "_fetch_splits", return_value=[])
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
-    def test_no_refresh_when_fresh(self, mock_price, mock_splits):
+    def test_unverified_empty_response_is_retried(self, mock_price, mock_splits):
         _write_transaction("2025-01-02", "MSFT", 100.0, 10.0)
         portfolio_engine.sync(_paths())
         portfolio_engine.sync_splits(_paths())
         mock_splits.reset_mock()
         portfolio_engine.sync_splits(_paths())
-        mock_splits.assert_not_called()
+        assert mock_splits.called
 
     def test_no_fetch_when_no_tickers(self):
         result = portfolio_engine.sync_splits(_paths())
@@ -407,8 +407,8 @@ class TestSyncSplits:
 
     @patch.object(portfolio_engine, "_fetch_splits", return_value=[["CRWD", "2025-01-03", 4.0]])
     @patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price)
-    def test_new_split_invalidates_price_cache(self, mock_price, mock_splits):
-        """When a new split is detected, the ticker's cached prices are dropped."""
+    def test_new_split_preserves_price_cache(self, mock_price, mock_splits):
+        """A split invalidates derived values, never the original observations."""
         _write_transaction("2025-01-02", "CRWD", 800.0, 1.0)
         portfolio_engine.sync(_paths())
 
@@ -426,9 +426,9 @@ class TestSyncSplits:
 
         portfolio_engine.sync_splits(_paths())
 
-        # Price history should no longer contain the split ticker
+        # Original observations survive split discovery
         cached = pd.read_csv(_paths()["price_history"], index_col=0)
-        assert "CRWD" not in cached.columns
+        assert "CRWD" in cached.columns
 
         # Daily values cache should be invalidated
         assert not os.path.exists(_paths()["daily_values"])
@@ -713,7 +713,7 @@ class TestUpdatePrices:
         close_date = portfolio_engine._last_market_close()
         # Write a cache with data through close_date
         dates = pd.date_range(end=close_date, periods=3)
-        cache = pd.DataFrame({"AAPL": [100.0, 101.0, 102.0]}, index=dates)
+        cache = pd.DataFrame({t: [100.0, 101.0, 102.0] for t in ["AAPL", "VOO", "QQQ"]}, index=dates)
         cache.to_csv(_paths()["price_history"])
         # This fixture represents a current tracked cache, not a legacy cache
         # whose newest row must first be treated as a provisional snapshot.
@@ -721,7 +721,8 @@ class TestUpdatePrices:
         # Write a portfolio with AAPL
         _write_transaction("2025-01-02", "AAPL", 100.0, 10.0)
         portfolio_engine.sync(_paths())
-        result = portfolio_engine.update_prices(_paths())
+        with patch.object(portfolio_engine, "_is_market_open", return_value=False):
+            result = portfolio_engine.update_prices(_paths())
         assert result["status"] == "ok"
 
     def test_empty_tickers_returns_ok(self):
@@ -779,7 +780,7 @@ class TestEventLedgerCache:
             ])
             writer.writerow(["B000001", "2025-01-01", "BUY", "XYZ", price, 100, ""])
 
-    def test_sync_preserves_matching_daily_cache_and_invalidates_changed_ledger(self):
+    def test_sync_preserves_last_chart_when_ledger_changes(self):
         self._write_event_ledger()
         pd.DataFrame([
             {"DATE": "2025-01-01", "MAIN": 1000, "VOO": 1000, "QQQ": 1000},
@@ -795,7 +796,8 @@ class TestEventLedgerCache:
 
         self._write_event_ledger(price=11)
         portfolio_engine.sync(_paths())
-        assert not os.path.exists(_paths()["daily_values"])
+        assert os.path.exists(_paths()["daily_values"])
+        assert portfolio_engine._cached_accounting_fingerprint(_paths()) != portfolio_engine._accounting_input_fingerprint(_paths())
 
     def test_dedup_cached_index(self):
         """Cached CSV with duplicate dates should not crash."""
@@ -906,7 +908,8 @@ class TestRefreshDataErrorHandling:
                 with patch.object(portfolio_engine, "sync_dividends"):
                     with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
                         result = portfolio_engine.refresh_data(_paths())
-        assert result["status"] == "ok"
+        assert result["status"] == "incomplete"
+        assert result["split_history"]["error"] == "split error"
 
     def test_returns_result_when_dividends_fail(self):
         """refresh_data should still return update_prices result even if dividends throw."""
@@ -1015,7 +1018,8 @@ class TestManualPricing:
     def test_update_prices_excludes_manual_tickers_from_fetch(self):
         _set_manual_pricing()
         _write_transaction("2026-03-23", "Flagship", 13.01, 6.149116)
-        portfolio_engine.sync(_paths())  # creates portfolio + VOO/QQQ shadows
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price):
+            portfolio_engine.sync(_paths())  # creates portfolio + VOO/QQQ shadows
         captured = {}
 
         def fake_download(tickers, *args, **kwargs):
@@ -1447,7 +1451,8 @@ class TestProvisionalBaseline:
         with open(_paths()["shadow_qqq"], "w", newline="") as f:
             w = csv.writer(f); w.writerow(portfolio_engine.COLUMNS)
             w.writerow(["2026-07-28", "QQQ", 570.0, 0.108, 61.56])
-        portfolio_engine.sync(_paths())
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price):
+            portfolio_engine.sync(_paths())
 
     @patch.object(portfolio_engine, "_is_market_open", return_value=True)
     def test_provisional_row_excluded_from_baseline(self, mock_open):
@@ -1669,7 +1674,8 @@ class TestProvisionalBaseline:
         with open(_paths()["shadow_qqq"], "w", newline="") as f:
             w = csv.writer(f); w.writerow(portfolio_engine.COLUMNS)
             w.writerow(["2026-07-28", "QQQ", 570.0, 65.23, shares * 61.56])
-        portfolio_engine.sync(_paths())
+        with patch.object(portfolio_engine, "_get_closing_price", side_effect=_mock_closing_price):
+            portfolio_engine.sync(_paths())
 
         # price_history as prod had it: 7/29 holds the stale intraday 59.94.
         prices = pd.DataFrame(
@@ -1767,7 +1773,8 @@ class TestGetGainersLosers:
         g, l, pg, pl = portfolio_engine.get_gainers_losers(summary, _paths())
         assert g == l == pg == pl == []
 
-    def test_ticker_missing_from_prices(self):
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_ticker_missing_from_prices(self, mock_open):
         self._write_prices([
             ["2025-01-02", 100],
             ["2025-01-03", 110],
@@ -1777,7 +1784,8 @@ class TestGetGainersLosers:
         assert len(g) == 1
         assert g[0]["TICKER"] == "AAPL"
 
-    def test_n_limits_results(self):
+    @patch.object(portfolio_engine, "_is_market_open", return_value=False)
+    def test_n_limits_results(self, mock_open):
         self._write_prices([
             ["2025-01-02", 10, 20, 30, 40, 50, 60],
             ["2025-01-03", 11, 22, 33, 38, 48, 55],
@@ -1959,3 +1967,108 @@ class TestCachedClosingPriceCoverage:
             row = portfolio_engine._build_shadow_row(
                 "2026-08-03", "VOO", 31.13, _paths())
         assert row[2] == 696.4
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("failure", ["incomplete", "exception", "chart"])
+def test_failed_refresh_preserves_entire_cache(force, failure):
+    paths = _paths()
+    originals = {
+        "price_history": b"DATE,XYZ\n2025-01-01,100\n",
+        "daily_values": b"DATE,PORTFOLIO\n2025-01-01,1000\n",
+        "last_updated": b"2025-01-01|close",
+        "provisional_prices": b"#v1 provisional-price-dates\n",
+    }
+    for key, content in originals.items():
+        with open(paths[key], "wb") as stream:
+            stream.write(content)
+
+    def fail(staged):
+        for key in originals:
+            with open(staged[key], "wb") as stream:
+                stream.write(b"bad replacement")
+        if failure == "exception":
+            raise RuntimeError("provider down")
+        return {"status": "incomplete" if failure == "incomplete" else "error",
+                "message": "XYZ prices unavailable"}
+
+    with patch.object(portfolio_engine, "_refresh_data_staged", side_effect=fail):
+        result = portfolio_engine.refresh_data(paths, force=force)
+    assert result["status"] != "ok"
+    assert result["using_cached_data"] is True
+    for key, content in originals.items():
+        with open(paths[key], "rb") as stream:
+            assert stream.read() == content
+
+
+@pytest.mark.parametrize("ticker", ["EMBJ", "XYZ"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_one_row_or_empty_history_cannot_replace_policy_cache(ticker, empty):
+    paths = _paths()
+    pd.DataFrame([["B1", "2025-01-02", "BUY", ticker, 100, 10, ""]], columns=[
+        "TRANSACTION_ID", "DATE", "ACTION", "TICKER", "PRICE", "SHARES", "LOT_ID"
+    ]).to_csv(paths["transactions"], index=False)
+    old = pd.DataFrame({ticker: [100.0], "VOO": [200.0], "QQQ": [300.0]},
+                       index=pd.to_datetime(["2025-01-02"]))
+    old.to_csv(paths["price_history"])
+    with open(paths["price_history"], "rb") as stream:
+        original = stream.read()
+    fetched = old.copy()
+    fetched.index = pd.to_datetime(["2025-01-10"])
+    fetched.columns = pd.MultiIndex.from_product([["Close"], fetched.columns])
+    if empty:
+        fetched = fetched.iloc[:0]
+    with patch.object(portfolio_engine, "_last_market_close", return_value=date(2025, 1, 10)), \
+         patch.object(portfolio_engine, "_is_market_open", return_value=False), \
+         patch("portfolio_engine.yf.download", return_value=fetched):
+        result = portfolio_engine.update_prices(paths, max_retries=1)
+    assert result["status"] == "incomplete"
+    assert ticker in result["failed_tickers"]
+    assert "2025-01-02" in result["message"]
+    assert not portfolio_engine._price_policy_is_current(paths)
+    with open(paths["price_history"], "rb") as stream:
+        assert stream.read() == original
+
+
+def test_successful_staged_refresh_publishes_cache():
+    paths = _paths()
+    def succeed(staged):
+        with open(staged["last_updated"], "w") as stream:
+            stream.write("2025-01-10|close")
+        return {"status": "ok"}
+    with patch.object(portfolio_engine, "_refresh_data_staged", side_effect=succeed):
+        assert portfolio_engine.refresh_data(paths)["status"] == "ok"
+    with open(paths["last_updated"]) as stream:
+        assert stream.read() == "2025-01-10|close"
+
+
+@pytest.mark.parametrize("missing_quote", [float("nan"), float("inf"), 0.0])
+def test_partial_intraday_quotes_keep_cached_data(missing_quote):
+    paths = _paths()
+    today = pd.Timestamp(portfolio_engine.datetime.now(
+        portfolio_engine.ZoneInfo("America/New_York")).date())
+    prior = today - pd.Timedelta(days=1)
+    pd.DataFrame({"AAPL": [100.0], "VOO": [200.0], "QQQ": [300.0]},
+                 index=[prior]).to_csv(paths["price_history"])
+    portfolio_engine._write_provisional_dates(paths, set())
+    with open(paths["last_updated"], "w") as stream:
+        stream.write(f"{prior.date()}|close")
+    with open(paths["price_history"], "rb") as stream:
+        old_prices = stream.read()
+    fetched = pd.DataFrame({"AAPL": [missing_quote], "VOO": [201.0], "QQQ": [301.0]}, index=[today])
+    fetched.columns = pd.MultiIndex.from_product([["Close"], fetched.columns])
+    with patch("price_provider._get_all_tickers", return_value=["AAPL", "VOO", "QQQ"]), \
+         patch.object(portfolio_engine, "sync"), \
+         patch.object(portfolio_engine, "sync_splits"), \
+         patch.object(portfolio_engine, "sync_dividends"), \
+         patch.object(portfolio_engine, "_last_market_close", return_value=prior.date()), \
+         patch.object(portfolio_engine, "_is_market_open", return_value=True), \
+         patch("portfolio_engine.yf.download", return_value=fetched):
+        result = portfolio_engine.refresh_data(paths)
+    assert result["status"] == "incomplete"
+    assert result["failed_tickers"] == ["AAPL"]
+    prices = pd.read_csv(paths["price_history"], index_col=0, parse_dates=True)
+    assert prices.loc[prior, "AAPL"] == 100
+    assert prices.loc[today, "VOO"] == 201
+    with open(paths["last_updated"]) as stream:
+        assert stream.read() == f"{prior.date()}|close"
