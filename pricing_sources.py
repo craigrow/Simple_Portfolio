@@ -53,7 +53,9 @@ def load_book(paths):
     return _cached_book(tuple(sorted(paths.items())), fingerprint(paths))
 
 
-@lru_cache(maxsize=8)
+# Each entry contains a portfolio's full history. Bound retained generations so
+# refresh copies and portfolio switching fit the 512 MiB service allocation.
+@lru_cache(maxsize=2)
 def _cached_book(path_items, generation):
     paths = dict(path_items)
     modes = instrument_modes(paths)
