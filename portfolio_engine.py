@@ -1842,7 +1842,13 @@ def get_refresh_warning(paths):
     try:
         with open(os.path.join(paths["data_dir"], "refresh_status.json")) as status_file:
             result = json.load(status_file)
-        return result.get("message", "") if result.get("status") != "ok" else ""
+        message = result.get("message", "") if result.get("status") != "ok" else ""
+        # Older refresh records appended provider coverage to the price message.
+        check = result.get("split_history", {})
+        if check.get("message"):
+            message = message.replace(check["message"], "").strip()
+        warning = split_history.user_warning(check)
+        return (message + (" " + warning if warning and warning not in message else "")).strip()
     except (OSError, ValueError):
         return ""
 
@@ -1898,12 +1904,13 @@ def _refresh_data_staged(paths):
         )
     split_check = split_history.summary(paths, _last_market_close())
     result['split_history'] = split_check
-    if split_error or split_check['pending']:
-        result['split_history']['error'] = split_error
+    result['split_history']['error'] = split_error
+    split_warning = split_history.user_warning(split_check)
+    if split_warning:
         if result.get('status') == 'ok':
             result['status'] = 'incomplete'
             result['usable'] = True
-        result['message'] = (result.get('message', '') + ' ' + (('Split-history check failed: ' + split_error + '. ') if split_error else '') + split_check['message']).strip()
+        result['message'] = (result.get('message', '') + ' ' + split_warning).strip()
     return result
 
 
