@@ -222,3 +222,16 @@ def summary(paths, through):
     pending = [r['ticker'] for r in rows if r['status'] not in {'provider_checked', 'not_applicable'}]
     return {'rows': rows, 'pending': pending, 'complete': not pending,
             'message': ('Split history needs review for: ' + ', '.join(pending)) if pending else 'Provider split history checked. Independent event evidence and ledger reconciliation are recorded in the split audit.'}
+
+
+def user_warning(check):
+    """Only known event inconsistencies affect the user's accounting decisions.
+
+    Provider coverage and request failures remain in split_status/attempts and
+    refresh_status; quote availability is reported by the pricing pipeline.
+    """
+    material = ('Invalid, conflicting', 'Conflicting ratio', 'Provider omitted known',
+                'Split cache differs', 'Missing or conflicting independently')
+    tickers = [r['ticker'] for r in check.get('rows', [])
+               if any(issue.startswith(material) for issue in r.get('issues', []))]
+    return ('Split records need review for: ' + ', '.join(tickers)) if tickers else ''

@@ -908,7 +908,7 @@ class TestRefreshDataErrorHandling:
                 with patch.object(portfolio_engine, "sync_dividends"):
                     with patch.object(portfolio_engine, "update_prices", return_value={"status": "ok"}):
                         result = portfolio_engine.refresh_data(_paths())
-        assert result["status"] == "incomplete"
+        assert result["status"] == "ok"
         assert result["split_history"]["error"] == "split error"
 
     def test_returns_result_when_dividends_fail(self):

@@ -99,21 +99,20 @@ def test_missing_middle_session_is_partial_even_when_endpoints_exist():
     assert not result['complete'] and result['missing_sessions']==['2025-01-03']
 
 
-def test_dashboard_exposes_unchecked_split_history_without_fetching(paths):
+def test_dashboard_keeps_provider_coverage_out_of_user_interface(paths):
     with patch('split_history.yf.Ticker',side_effect=AssertionError('No network on render')):
         response=app.test_client().get('/?portfolio=test&auto_refreshed=1')
     assert response.status_code==200
-    assert b'Split history needs review' in response.data
-    assert b'id="split-coverage"' in response.data
-    assert b'not checked' in response.data
+    assert b'Split history needs review' not in response.data
+    assert b'id="split-coverage"' not in response.data
 
 
-def test_quote_success_cannot_hide_split_failure(paths):
+def test_quote_success_logs_split_failure_without_user_warning(paths):
     with patch.object(engine,'sync'), patch.object(engine,'sync_splits',side_effect=RuntimeError('split timeout')), patch.object(engine,'sync_dividends'), patch.object(engine,'update_prices',return_value={'status':'ok'}):
         result=engine.refresh_data(paths)
-    assert result['status']=='incomplete' and result['usable']
+    assert result['status']=='ok'
     assert result['split_history']['error']=='split timeout'
-    assert 'Split history needs review' in result['message']
+    assert 'Split history needs review' not in result.get('message', '')
 
 
 def test_forward_and_reverse_events_reconcile_whole_lot_sales():
@@ -151,3 +150,22 @@ def test_prices_without_action_values_are_not_verified_no_split_history():
     result=splits.validate_history('XYZ','2025-01-02','2025-01-06',frame)
     assert not result['complete']
     assert result['missing_action_sessions']==['2025-01-03']
+
+
+def test_coverage_only_is_logged_and_old_banner_is_suppressed(paths):
+    splits.sync(paths, '2025-01-06', fetch=lambda *args: {
+        'rows': [], 'complete': False, 'missing_sessions': ['2025-01-03']})
+    check = splits.summary(paths, '2025-01-06')
+    assert check['pending'] and not splits.user_warning(check)
+    assert '2025-01-03' in (Path(paths['data_dir']) / 'split_attempts.jsonl').read_text()
+    status = Path(paths['data_dir']) / 'refresh_status.json'
+    status.write_text(json.dumps({'status':'incomplete', 'message':check['message'], 'split_history':check}))
+    assert engine.get_refresh_warning(paths) == ''
+    status.write_text(json.dumps({'status':'incomplete', 'message':'Some prices could not be refreshed. ' + check['message'], 'split_history':check}))
+    assert engine.get_refresh_warning(paths) == 'Some prices could not be refreshed.'
+
+
+def test_known_split_conflict_still_warns(paths):
+    splits.sync(paths, '2025-01-06', fetch=complete)
+    splits.sync(paths, '2025-01-07', fetch=lambda t,*args: {'complete':True,'rows':[[t,'2025-01-03',3]]})
+    assert 'XYZ' in splits.user_warning(splits.summary(paths, '2025-01-07'))

@@ -107,7 +107,6 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
 
 <div class="container">
     {% if refresh_warning %}<div class="warning">{{ refresh_warning }}</div>{% endif %}
-    {% if split_history %}<div class="warning">{{ split_history.message }}</div>{% endif %}
     {% if accounting_error %}<div class="warning">Accounting replay warning: {{ accounting_error }}</div>{% endif %}
     {% set main_total = portfolio_value if accounting else portfolio_value + portfolio_divs %}
     {% set main_gain = main_total - portfolio_invested %}
@@ -325,15 +324,6 @@ thead th:nth-child(2) { background: var(--surface2); z-index: 3; }
         </table>
     </div>
 
-    {% if split_history %}
-    <details style="margin:1rem 0;" id="split-coverage">
-        <summary>Split-history coverage and review status</summary>
-        <p>Provider coverage is not independent verification. A successful quote refresh does not certify split completeness.</p>
-        <table><thead><tr><th>Ticker</th><th>Status</th><th>Required from</th><th>Provider checked through</th><th>Last successful check (UTC)</th><th>Review findings</th></tr></thead><tbody>
-        {% for row in split_history.rows %}<tr><td>{{ row.ticker }}</td><td>{{ row.status|replace('_', ' ') }}</td><td>{{ row.required_from }}</td><td>{{ row.covered_through or 'Not established' }}</td><td>{{ row.last_success_at[:19]|replace('T', ' ') if row.last_success_at else 'Not recorded' }}</td><td>{{ row.issues|join('; ') if row.issues else '' }}</td></tr>{% endfor %}
-        </tbody></table>
-    </details>
-    {% endif %}
     <div id="history-table" class="tab-panel">
         {% if history %}
         <table class="auto-sort">
